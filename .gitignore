@@ -1,0 +1,9 @@
+node_modules/
+**/node_modules/
+.vite/
+**/.vite/
+.npm/
+*.tgz
+*.log
+test/scratch/
+coverage/
