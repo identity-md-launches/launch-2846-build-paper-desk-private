@@ -1,286 +1,236 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  ApiError,
-  TERMINAL_STATUSES,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import {
   getBackend,
-  type Account,
+  TIMEFRAMES,
+  TIMEFRAME_SECONDS,
   type Backend,
-  type ClosedTrade,
-  type IntentAck,
-  type IntentStatus,
   type Market,
-  type Me,
-  type OpenOrder,
-  type Position,
-  type StreamMessage,
-  type StreamState,
   type Timeframe,
+  type Trade,
 } from "./api";
+import { addressFromUrl, updateAddressUrl } from "./address";
+import { useAccount } from "./useAccount";
+import { computeStats } from "./stats";
+import {
+  formatPrice,
+  formatPct,
+  formatUsd,
+  formatUsdCompact,
+  toMs,
+} from "./format";
 import { Header } from "./components/Header";
 import { Chart } from "./components/Chart";
-import { TradeTicket, type TicketHandle } from "./components/TradeTicket";
-import { HistoryTable, MarketsTable, PositionsTable } from "./components/Tables";
-import { Toasts, type Toast } from "./components/Toasts";
-import { formatLeverage, formatUsd, toMs } from "./format";
+import { Analysis } from "./components/Analysis";
+import {
+  CashflowsTable,
+  pnlClass,
+  PositionsTable,
+  TradesTable,
+} from "./components/Tables";
 
-type Tab = "trade" | "book" | "analysis";
-const TABS: { id: Tab; key: string; label: string; more?: string }[] = [
-  { id: "trade", key: "F1", label: "TRADE" },
-  { id: "book", key: "F2", label: "POSITIONS", more: " & HISTORY" },
+type Tab = "account" | "history" | "analysis";
+const TABS: { id: Tab; key: string; label: string }[] = [
+  { id: "account", key: "F1", label: "ACCOUNT" },
+  { id: "history", key: "F2", label: "HISTORY" },
   { id: "analysis", key: "F3", label: "ANALYSIS" },
 ];
-
-const INTENT_POLL_MS = 1000;
-const INTENT_POLL_MAX = 90;
-const TOAST_TTL_MS = 7000;
-
-function isTyping(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  if (el.isContentEditable) return true;
-  if (el instanceof HTMLInputElement) return el.type !== "range" && el.type !== "checkbox" && el.type !== "radio";
-  return el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
-}
-
+const token = (n: number | undefined) =>
+  n === undefined
+    ? "--"
+    : n.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
 export function App() {
   const [backend, setBackend] = useState<Backend | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
-  const [markets, setMarkets] = useState<Market[] | null>(null);
-  const [account, setAccount] = useState<Account | null>(null);
-  const [positions, setPositions] = useState<Position[] | null>(null);
-  const [history, setHistory] = useState<ClosedTrade[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [stream, setStream] = useState<StreamState>("connecting");
-  const [marks, setMarks] = useState<Record<string, { price: number; at: number }>>({});
-  const [symbol, setSymbol] = useState("BTC");
-  const [timeframe, setTimeframe] = useState<Timeframe>("15m");
-  const [tab, setTab] = useState<Tab>("trade");
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const [closing, setClosing] = useState<Set<string>>(new Set());
-  const ticketRef = useRef<TicketHandle>(null);
-  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ trade: null, book: null, analysis: null });
-  const watched = useRef(new Map<string, string>()); // intentId -> toast id
-  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
-
+  const [address, setAddress] = useState(addressFromUrl);
+  const [tab, setTab] = useState<Tab>("account");
+  const [symbol, setSymbol] = useState("BTC"),
+    [timeframe, setTimeframe] = useState<Timeframe>("15m");
+  const [markets, setMarkets] = useState<Market[] | null>(null),
+    [quoteTime, setQuoteTime] = useState(0),
+    [marketError, setMarketError] = useState("");
+  const [overlays, setOverlays] = useState(true),
+    [focusTrade, setFocusTrade] = useState<{
+      trade: Trade;
+      key: number;
+    } | null>(null);
+  const [quoteRetry, setQuoteRetry] = useState(0);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const account = useAccount(backend, address);
+  const stats = useMemo(
+    () => computeStats(account.trades ?? []),
+    [account.trades],
+  );
   useEffect(() => {
-    let live = true;
-    getBackend().then((b) => live && setBackend(b));
+    let alive = true;
+    getBackend().then((b) => {
+      if (alive) setBackend(b);
+    });
     return () => {
-      live = false;
-      timers.current.forEach(clearTimeout);
+      alive = false;
     };
   }, []);
-
-  const refresh = useCallback(
-    async (which: ("account" | "positions" | "history")[]) => {
-      if (!backend) return;
-      await Promise.all([
-        which.includes("account") && backend.account().then(setAccount),
-        which.includes("positions") && backend.positions().then(setPositions),
-        which.includes("history") && backend.history(200).then(setHistory),
-      ]).catch(() => {
-        /* the next stream push or poll retries */
-      });
-    },
-    [backend],
-  );
-
-  // Initial load.
   useEffect(() => {
-    if (!backend) return;
-    let live = true;
-    setLoadError(null);
-    Promise.all([backend.me(), backend.markets(), backend.account(), backend.positions(), backend.history(200)])
-      .then(([m, mk, a, p, h]) => {
-        if (!live) return;
-        setMe(m);
-        setMarkets(mk);
-        setAccount(a);
-        setPositions(p);
-        setHistory(h);
-        if (mk.length && !mk.some((x) => x.symbol === "BTC")) setSymbol(mk[0].symbol);
-      })
-      .catch((err: unknown) => {
-        if (!live) return;
-        const msg = err instanceof ApiError ? `${err.path} answered ${err.message}` : err instanceof Error ? err.message : String(err);
-        setLoadError(msg);
-      });
-    return () => {
-      live = false;
+    const initial = addressFromUrl();
+    if (initial) updateAddressUrl(initial, true);
+    const pop = () => {
+      setAddress(addressFromUrl());
+      setFocusTrade(null);
     };
-  }, [backend]);
-
-  const updateToast = useCallback((id: string, patch: Partial<Toast>) => {
-    setToasts((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-    if (patch.status && patch.status !== "queued" && patch.status !== "sending") {
-      const timer = setTimeout(() => {
-        timers.current.delete(timer);
-        setToasts((ts) => ts.filter((t) => t.id !== id));
-      }, patch.status === "confirmed" ? TOAST_TTL_MS : TOAST_TTL_MS * 2);
-      timers.current.add(timer);
-    }
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
   }, []);
-
-  const settle = useCallback(
-    (intentId: string, status: IntentStatus, error?: string) => {
-      const toastId = watched.current.get(intentId);
-      if (!toastId) return;
-      if (TERMINAL_STATUSES.includes(status)) {
-        watched.current.delete(intentId);
-        refresh(["account", "positions", "history"]);
-        setClosing(new Set());
-      }
-      updateToast(toastId, { status, error });
-    },
-    [refresh, updateToast],
-  );
-
-  // Push stream.
+  const loadAddress = useCallback((next: string) => {
+    if (new URLSearchParams(location.search).get("address") !== (next || null))
+      updateAddressUrl(next);
+    setAddress(next);
+    setFocusTrade(null);
+  }, []);
   useEffect(() => {
-    if (!backend) return;
-    const onMessage = (m: StreamMessage) => {
-      switch (m.type) {
-        case "mark": {
-          const list = Array.isArray(m.data) ? m.data : [m.data];
-          setMarks((prev) => {
-            const next = { ...prev };
-            for (const u of list) next[u.symbol] = { price: u.mark, at: toMs(u.t ?? null) ?? Date.now() };
-            return next;
-          });
-          break;
-        }
-        case "positions":
-          setPositions(m.data);
-          break;
-        case "account":
-          setAccount(m.data);
-          break;
-        case "intent":
-          settle(m.data.intentId, m.data.status, m.data.error);
-          break;
+    const key = (e: KeyboardEvent) => {
+      if (e.altKey || e.metaKey || e.ctrlKey) return;
+      const i = ["F1", "F2", "F3"].indexOf(e.key);
+      if (i !== -1) {
+        e.preventDefault();
+        setTab(TABS[i].id);
+        tabRefs.current[i]?.focus();
       }
     };
-    return backend.stream(onMessage, setStream);
-  }, [backend, settle]);
-
-  /** Poll an intent until it reaches a terminal status (the stream may also settle it first). */
-  const track = useCallback(
-    (ack: IntentAck, toastId: string) => {
-      if (!backend) return;
-      watched.current.set(ack.intentId, toastId);
-      updateToast(toastId, { intentId: ack.intentId, status: ack.status });
-      if (TERMINAL_STATUSES.includes(ack.status)) return settle(ack.intentId, ack.status);
-      let tries = 0;
-      const poll = () => {
-        if (!watched.current.has(ack.intentId)) return;
-        if (++tries > INTENT_POLL_MAX) return settle(ack.intentId, "expired", "No final status after 90 seconds. Check positions.");
-        backend
-          .intent(ack.intentId)
-          .then((r) => {
-            if (TERMINAL_STATUSES.includes(r.status)) settle(ack.intentId, r.status, r.error);
-            else schedule();
-          })
-          .catch(schedule);
-      };
-      const schedule = () => {
-        const timer = setTimeout(() => {
-          timers.current.delete(timer);
-          poll();
-        }, INTENT_POLL_MS);
-        timers.current.add(timer);
-      };
-      schedule();
-    },
-    [backend, settle, updateToast],
-  );
-
-  const submitIntent = useCallback(
-    async (label: string, send: () => Promise<IntentAck>) => {
-      const toastId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setToasts((ts) => [...ts.slice(-4), { id: toastId, intentId: null, label, status: "sending" }]);
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+  useEffect(() => {
+    setMarkets(null);
+    setMarketError("");
+    if (!backend || !address) return;
+    let active = true,
+      busy = false;
+    let ctrl: AbortController | null = null;
+    const load = async () => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      ctrl = new AbortController();
+      const signal = ctrl.signal;
       try {
-        track(await send(), toastId);
-      } catch (err) {
-        updateToast(toastId, { status: "error", error: err instanceof Error ? err.message : String(err) });
-        setClosing(new Set());
+        const rows = await backend.markets(signal);
+        if (active && !signal.aborted) {
+          setMarkets(rows);
+          setQuoteTime(Date.now());
+          setMarketError("");
+        }
+      } catch {
+        if (active && !signal.aborted)
+          setMarketError(
+            "Market quotes unavailable. Candle history may still be available.",
+          );
+      } finally {
+        busy = false;
       }
-    },
-    [track, updateToast],
-  );
-
-  const openOrder = (o: OpenOrder) =>
-    submitIntent(`Open ${o.isLong ? "long" : "short"} ${o.symbol} ${formatUsd(o.marginUsd)} at ${formatLeverage(o.leverage)}`, () =>
-      backend!.openOrder(o),
-    );
-
-  const closeIds = (ids: string[]) => {
-    const p = positions?.find((x) => x.positionId === ids[0]);
-    setClosing((s) => new Set([...s, ...ids]));
-    submitIntent(p ? `Close ${p.isLong ? "long" : "short"} ${p.symbol} ${formatUsd(p.sizeUsd)}` : "Close position", () =>
-      backend!.closePositions(ids),
-    );
-  };
-
-  const closeAll = () => {
-    setClosing(new Set(positions?.map((p) => p.positionId) ?? []));
-    return submitIntent(`Close all ${positions?.length ?? 0} positions`, () => backend!.closeAll());
-  };
-
-  const selectTab = (t: Tab, focus = false) => {
-    setTab(t);
-    if (focus) tabRefs.current[t]?.focus();
-  };
-
-  // Global shortcuts. F-keys work everywhere; letter keys only outside text fields and dialogs.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const fIndex = ["F1", "F2", "F3"].indexOf(e.key);
-      if (fIndex >= 0 && !e.altKey && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        if (!document.querySelector("dialog[open]")) setTab(TABS[fIndex].id);
-        return;
-      }
-      if (e.altKey || e.ctrlKey || e.metaKey || isTyping(e.target) || document.querySelector("dialog[open]")) return;
-      const k = e.key.toLowerCase();
-      if (tab !== "trade" && ["l", "s", "m", "r"].includes(k)) setTab("trade");
-      if (k === "l") ticketRef.current?.setSide(true);
-      else if (k === "s") ticketRef.current?.setSide(false);
-      else if (k === "m") {
-        e.preventDefault();
-        requestAnimationFrame(() => ticketRef.current?.focusMargin());
-      } else if (k === "r") requestAnimationFrame(() => ticketRef.current?.review());
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [tab]);
-
+    const visibility = () => {
+      if (document.visibilityState === "visible") void load();
+      else ctrl?.abort();
+    };
+    void load();
+    const id = setInterval(() => void load(), 5000);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      active = false;
+      ctrl?.abort();
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [backend, address, quoteRetry]);
+  const inspectTrade = (trade: Trade) => {
+    setSymbol(trade.symbol);
+    setOverlays(true);
+    setTab("account");
+    const opened = toMs(trade.openedAt);
+    if (opened !== null) {
+      const age = Math.max(0, (Date.now() - opened) / 1000);
+      if (age / TIMEFRAME_SECONDS[timeframe] > 970)
+        setTimeframe(
+          TIMEFRAMES.find((tf) => age / TIMEFRAME_SECONDS[tf] <= 970) ?? "1d",
+        );
+    }
+    setFocusTrade({ trade, key: Date.now() });
+  };
   const onTabKey = (e: ReactKeyboardEvent, i: number) => {
-    const n = TABS.length;
-    let next = -1;
-    if (e.key === "ArrowRight") next = (i + 1) % n;
-    else if (e.key === "ArrowLeft") next = (i - 1 + n) % n;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = n - 1;
+    const next =
+      e.key === "ArrowRight"
+        ? (i + 1) % 3
+        : e.key === "ArrowLeft"
+          ? (i + 2) % 3
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? 2
+              : -1;
     if (next >= 0) {
       e.preventDefault();
-      selectTab(TABS[next].id, true);
+      setTab(TABS[next].id);
+      tabRefs.current[next]?.focus();
     }
   };
-
-  const symbolPositions = positions ?? [];
-  const mark = marks[symbol] ?? null;
-  const markPrice = mark?.price ?? markets?.find((m) => m.symbol === symbol)?.mark ?? null;
-  const liveMarkets = markets?.map((m) => (marks[m.symbol] ? { ...m, mark: marks[m.symbol].price } : m)) ?? null;
-
+  const openPnl = account.positions?.reduce((s, p) => s + p.pnlUsd, 0);
+  const hasNoActivity =
+    account.summary &&
+    account.positions &&
+    account.trades &&
+    account.cashflows &&
+    !account.positions.length &&
+    !account.trades.length &&
+    !account.cashflows.length;
+  const mark = markets?.find((m) => m.symbol === symbol);
+  const metrics: [string, string, string?][] = [
+    ["Equity", formatUsd(account.summary?.equity)],
+    [
+      "All-time PnL",
+      formatUsd(account.summary?.pnl, { sign: true }),
+      pnlClass(account.summary?.pnl),
+    ],
+    ["Open PnL", formatUsd(openPnl, { sign: true }), pnlClass(openPnl)],
+    ["PAPER minted", token(account.summary?.paperMinted)],
+    [
+      "Win rate",
+      account.trades && stats.winRate !== null
+        ? `${stats.winRate.toFixed(1)}%`
+        : "--",
+    ],
+    ["Trade count", account.trades ? String(stats.count) : "--"],
+    [
+      "Liquidations",
+      account.trades ? String(stats.liquidations) : "--",
+      stats.liquidations ? "bust" : "",
+    ],
+  ];
   return (
     <div className="app">
-      <Header me={me} account={account} stream={stream} mock={!!backend?.mock} />
+      <a className="skip-link" href="#workspace">
+        Skip to account workspace
+      </a>
+      <Header
+        address={address}
+        onLoad={loadAddress}
+        status={account.status}
+        mock={!!backend?.mock}
+        asOf={account.summary?.asOf}
+      />
       <nav className="tabs" aria-label="Workspace">
-        <div role="tablist" aria-label="Workspace tabs" className="tablist">
+        <div className="tablist" role="tablist" aria-label="Workspace tabs">
           {TABS.map((t, i) => (
             <button
               key={t.id}
               ref={(el) => {
-                tabRefs.current[t.id] = el;
+                tabRefs.current[i] = el;
               }}
               type="button"
               role="tab"
@@ -289,68 +239,257 @@ export function App() {
               aria-selected={tab === t.id}
               tabIndex={tab === t.id ? 0 : -1}
               className="tab"
-              onClick={() => selectTab(t.id)}
+              onClick={() => setTab(t.id)}
               onKeyDown={(e) => onTabKey(e, i)}
             >
               <kbd>{t.key}</kbd> {t.label}
-              {t.more && <span className="tab-long">{t.more}</span>}
             </button>
           ))}
         </div>
+        <p className="nav-note">Synthetic perps · BTC / ETH · All times UTC</p>
       </nav>
-
-      {loadError && (
-        <div className="banner" role="alert">
-          <p>Backend not reachable: {loadError}.</p>
-          <p>
-            Start the server on this origin, or <a href="?mock=1">open mock mode</a>.
-          </p>
-        </div>
-      )}
-
-      <main className="main">
-        <div id="panel-trade" role="tabpanel" aria-labelledby="tab-trade" hidden={tab !== "trade"} className="trade">
-          <div className="trade-main">
-            {backend && (
-              <Chart
-                backend={backend}
-                symbol={symbol}
-                timeframe={timeframe}
-                onTimeframe={setTimeframe}
-                mark={mark}
-                positions={symbolPositions}
+      <main id="workspace" className="main" tabIndex={-1}>
+        {!address ? (
+          <>
+            <section
+              className="empty-workspace"
+              id={`panel-${tab}`}
+              role="tabpanel"
+              aria-labelledby={`tab-${tab}`}
+            >
+              <div className="empty-intro">
+                <p className="terminal-prompt" aria-hidden="true">
+                  &gt;_
+                </p>
+                <h2 id="empty-title">Inspect a Papertrade account.</h2>
+                <p>
+                  Paste a public wallet address above to view positions, trades
+                  and performance with the BB(15) sigma ladder.
+                </p>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() =>
+                    document.getElementById("account-address")?.focus()
+                  }
+                >
+                  Enter an address <span aria-hidden="true">↑</span>
+                </button>
+                <p className="hint">
+                  Read only. No wallet connection or signing.
+                </p>
+              </div>
+              <div className="empty-capabilities">
+                <div>
+                  <span className="section-code">01</span>
+                  <h3>Account</h3>
+                  <p>Positions and trade entries on the price chart.</p>
+                </div>
+                <div>
+                  <span className="section-code">02</span>
+                  <h3>History</h3>
+                  <p>Filter activity and export trades or cashflows.</p>
+                </div>
+                <div>
+                  <span className="section-code">03</span>
+                  <h3>Analysis</h3>
+                  <p>Equity, trade statistics and entry sigma buckets.</p>
+                </div>
+              </div>
+              <p className="empty-mode">
+                {backend?.mock ? (
+                  "Mock mode is enabled. Any valid address generates a synthetic account."
+                ) : (
+                  <>
+                    A same-origin data service supplies account activity.{" "}
+                    <a href="?mock=1">Open mock mode</a> to explore with
+                    synthetic data.
+                  </>
+                )}
+              </p>
+            </section>
+            {TABS.filter((item) => item.id !== tab).map((item) => (
+              <div
+                key={item.id}
+                id={`panel-${item.id}`}
+                role="tabpanel"
+                aria-labelledby={`tab-${item.id}`}
+                hidden
               />
+            ))}
+          </>
+        ) : (
+          <>
+            {account.error && (
+              <div className="banner" role="alert">
+                <p>{account.error}</p>
+                <button className="btn" onClick={account.refresh}>
+                  Retry account
+                </button>
+                {!backend?.mock && (
+                  <a href={`?mock=1&address=${address}`}>Open mock mode</a>
+                )}
+              </div>
             )}
-            <PositionsTable positions={positions} closing={closing} onClose={closeIds} onCloseAll={closeAll} compact />
-          </div>
-          <TradeTicket
-            ref={ticketRef}
-            markets={liveMarkets ?? []}
-            symbol={symbol}
-            onSymbol={setSymbol}
-            mark={markPrice}
-            account={account}
-            me={me}
-            onSubmit={openOrder}
-          />
-        </div>
-        <div id="panel-book" role="tabpanel" aria-labelledby="tab-book" hidden={tab !== "book"} className="book">
-          <PositionsTable positions={positions} closing={closing} onClose={closeIds} onCloseAll={closeAll} />
-          <HistoryTable history={history} />
-        </div>
-        <div id="panel-analysis" role="tabpanel" aria-labelledby="tab-analysis" hidden={tab !== "analysis"} className="book">
-          <MarketsTable markets={liveMarkets} />
-        </div>
+            {hasNoActivity && (
+              <div className="no-activity" role="status">
+                <strong>No activity for this account.</strong>
+                <p>
+                  No positions, trades, deposits or withdrawals were found.
+                  Paste another public address to inspect a different account.
+                </p>
+              </div>
+            )}
+            <div
+              id="panel-account"
+              role="tabpanel"
+              aria-labelledby="tab-account"
+              hidden={tab !== "account"}
+            >
+              {tab === "account" && (
+                <>
+                  <dl className="metrics">
+                    {metrics.map(([label, value, color]) => (
+                      <div className="metric" key={label}>
+                        <dt>{label}</dt>
+                        <dd className={`num ${color ?? ""}`}>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="account-subline">
+                    <p className="hint">
+                      Staking rewards{" "}
+                      <span className="num">
+                        {token(account.summary?.stakingRewards)} PAPER
+                      </span>
+                    </p>
+                    <p className="hint">
+                      Win rate / counts use settled positions from complete
+                      trade history.
+                    </p>
+                  </div>
+                  <div className="market-toolbar">
+                    <div className="seg" role="group" aria-label="Market">
+                      {["BTC", "ETH"].map((s) => (
+                        <button
+                          type="button"
+                          key={s}
+                          className="seg-btn"
+                          aria-pressed={symbol === s}
+                          onClick={() => {
+                            setSymbol(s);
+                            setFocusTrade(null);
+                          }}
+                        >
+                          {s}
+                          <span className="ro-k"> / USD</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="market-price num">
+                      {formatPrice(mark?.mark)}{" "}
+                      <span className={pnlClass(mark?.change24hPct)}>
+                        {formatPct(mark?.change24hPct)}{" "}
+                        <span className="ro-k">24h</span>
+                      </span>
+                    </p>
+                    <p className="hint market-volume">
+                      Vol {formatUsdCompact(mark?.volume24hUsd)} · Hyperliquid
+                      mid
+                    </p>
+                    <label className="overlay-toggle">
+                      <input
+                        type="checkbox"
+                        checked={overlays}
+                        onChange={(e) => setOverlays(e.target.checked)}
+                      />
+                      Account overlays
+                    </label>
+                  </div>
+                  {marketError && (
+                    <p className="local-error">
+                      {marketError}{" "}
+                      <button
+                        className="btn"
+                        onClick={() => setQuoteRetry((n) => n + 1)}
+                      >
+                        Retry quotes
+                      </button>
+                    </p>
+                  )}
+                  {backend && (
+                    <Chart
+                      backend={backend}
+                      symbol={symbol}
+                      timeframe={timeframe}
+                      onTimeframe={setTimeframe}
+                      mark={mark ? { price: mark.mark, at: quoteTime } : null}
+                      positions={account.positions ?? []}
+                      trades={account.trades ?? []}
+                      overlays={overlays}
+                      focusTrade={focusTrade}
+                    />
+                  )}
+                  <PositionsTable positions={account.positions} />
+                  <TradesTable
+                    trades={account.trades}
+                    onTrade={inspectTrade}
+                    recent
+                  />
+                </>
+              )}
+            </div>
+            <div
+              id="panel-history"
+              role="tabpanel"
+              aria-labelledby="tab-history"
+              hidden={tab !== "history"}
+            >
+              {tab === "history" && (
+                <div className="history">
+                  <TradesTable
+                    key={address}
+                    address={address}
+                    trades={account.trades}
+                    onTrade={inspectTrade}
+                  />
+                  <CashflowsTable
+                    key={`cash-${address}`}
+                    address={address}
+                    cashflows={account.cashflows}
+                  />
+                </div>
+              )}
+            </div>
+            <div
+              id="panel-analysis"
+              role="tabpanel"
+              aria-labelledby="tab-analysis"
+              hidden={tab !== "analysis"}
+            >
+              {tab === "analysis" && backend && (
+                <Analysis
+                  key={address}
+                  backend={backend}
+                  address={address}
+                  trades={account.trades}
+                />
+              )}
+            </div>
+          </>
+        )}
       </main>
-
       <footer className="statusbar">
         <p>
-          <kbd>F1</kbd>-<kbd>F3</kbd> tabs <kbd>L</kbd> long <kbd>S</kbd> short <kbd>M</kbd> margin <kbd>R</kbd> review{" "}
-          <kbd>Esc</kbd> cancel
+          <kbd>F1</kbd> Account <kbd>F2</kbd> History <kbd>F3</kbd> Analysis
         </p>
-        <p className="statusbar-api">Data from /api on this origin{backend?.mock ? " (mock mode)" : ""}</p>
+        <p>
+          {backend?.mock
+            ? "Synthetic data · Mock mode"
+            : "Papertrade · Read-only account data"}{" "}
+          <span className="footer-source">· Same-origin /api</span>
+        </p>
       </footer>
-      <Toasts toasts={toasts} onDismiss={(id) => setToasts((ts) => ts.filter((t) => t.id !== id))} />
     </div>
   );
 }

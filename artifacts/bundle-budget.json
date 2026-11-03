@@ -1,0 +1,74 @@
+{
+  "limitBytes": 8388608,
+  "artifactPathBudgetBytes": 2097152,
+  "counting": "Conservative sum of all existing Git-visible submission files, including unchanged files; excludes ignored scratch/input/cache paths. This upper-bounds added file contents.",
+  "protectedBuildAndDependencyFilesUnchanged": true,
+  "originalIndicatorsAndTestsUnchanged": true,
+  "testedSourceMatchesRepository": true,
+  "testedExportMatchesRepository": true,
+  "cspUnchanged": true,
+  "relativeRuntimeAssetsComplete": true,
+  "noGitSubmodule": true,
+  "browserChecksPassed": 31,
+  "unitTestsPassed": 88,
+  "axeStatesWithoutViolations": 4,
+  "tastePassedEach": 15,
+  "tasteTotalEach": 16,
+  "tasteException": "Monospace prose retained for the requested Bloomberg look.",
+  "distFiles": [
+    {
+      "path": "dist/assets/ibm-plex-mono-latin-400-normal-CvHOgSBP.woff",
+      "bytes": 13144,
+      "sha256": "328d50b6ece9ca25c46eea3e885ba497f6237f2fb84ef7b92f88e14a1a25e381"
+    },
+    {
+      "path": "dist/assets/ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2",
+      "bytes": 14708,
+      "sha256": "08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7"
+    },
+    {
+      "path": "dist/assets/ibm-plex-mono-latin-600-normal-BgSNZQsw.woff2",
+      "bytes": 15620,
+      "sha256": "0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83"
+    },
+    {
+      "path": "dist/assets/ibm-plex-mono-latin-600-normal-DWFSQ4vo.woff",
+      "bytes": 13208,
+      "sha256": "cb96282f22c6f19112856fd6e0b34e2baefaf4ca6551e851d58c5ab0aabcd2be"
+    },
+    {
+      "path": "dist/assets/index-DRHMmjtw.css",
+      "bytes": 18040,
+      "sha256": "57634ff1ac4de40aa6d45f92788f92e79a9500e0dca71439cdf3ff13895166b7"
+    },
+    {
+      "path": "dist/assets/index-rKXbbi9M.js",
+      "bytes": 382469,
+      "sha256": "5634773ff5419e8e24c599e0f1e8cbf9896d3da409f33e227cbd37aa4dc7d1a1"
+    },
+    {
+      "path": "dist/assets/mock-DfIKwihr.js",
+      "bytes": 4292,
+      "sha256": "8238bd88e9d17dc25c7d5278ba55d4581c47b6c760b000b2d9c396a814dedd27"
+    },
+    {
+      "path": "dist/favicon.svg",
+      "bytes": 351,
+      "sha256": "e1e039e6f3dd1f3300ad0941f4213168c5a1db89c7f9d754b4d34a05b6bc40fe"
+    },
+    {
+      "path": "dist/index.html",
+      "bytes": 1504,
+      "sha256": "d4b1697234915bd3d11f038da3a212da317671859a2b0f1a7b134f6b8e5cdac2"
+    },
+    {
+      "path": "dist/og.png",
+      "bytes": 38180,
+      "sha256": "1a5a627e4752a238cb28573426d76040d1ffdd58e4e1d9f32c5e09f0fa948202"
+    }
+  ],
+  "submissionFileCount": 57,
+  "submissionFilesBytes": 1935941,
+  "artifactFilesBytes": 1119029,
+  "distBytes": 501516
+}

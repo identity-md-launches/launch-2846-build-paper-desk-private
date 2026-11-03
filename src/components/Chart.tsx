@@ -17,7 +17,15 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { TIMEFRAMES, TIMEFRAME_SECONDS, type Backend, type Candle, type Position, type Timeframe } from "../api";
+import {
+  TIMEFRAMES,
+  TIMEFRAME_SECONDS,
+  type Backend,
+  type Candle,
+  type Position,
+  type Timeframe,
+  type Trade,
+} from "../api";
 import {
   bandLadder,
   bustWithinRange,
@@ -27,7 +35,8 @@ import {
   initialRange,
   type BandPoint,
 } from "../indicators";
-import { formatPrice } from "../format";
+import { accountMarkers } from "../chartOverlays";
+import { formatDateTime, formatPrice } from "../format";
 
 const BAND_STYLE: { key: keyof Omit<BandPoint, "sd">; color: string }[] = [
   { key: "mid", color: "#6366f1" },
@@ -39,7 +48,7 @@ const BAND_STYLE: { key: keyof Omit<BandPoint, "sd">; color: string }[] = [
   { key: "lo2", color: "#16a34a" },
 ];
 
-const LINE_COLORS = { entry: "#8a8578", tp: "#22c55e", sl: "#ef4444", bust: "#FF2D78" };
+const LINE_COLORS = { entry: "#8a8578", bust: "#FF2D78" };
 const CANDLE_LIMIT = 1000;
 
 interface Props {
@@ -47,9 +56,12 @@ interface Props {
   symbol: string;
   timeframe: Timeframe;
   onTimeframe: (tf: Timeframe) => void;
-  /** Latest streamed mark for `symbol`; updates the forming bar. */
+  /** Latest polled mark for `symbol`; updates the forming bar. */
   mark: { price: number; at: number } | null;
   positions: Position[];
+  trades: Trade[];
+  overlays: boolean;
+  focusTrade: { trade: Trade; key: number } | null;
 }
 
 interface Readout {
@@ -67,7 +79,22 @@ interface Level {
 
 const asTime = (t: number) => t as UTCTimestamp;
 
-export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions }: Props) {
+export function Chart({
+  backend,
+  symbol,
+  timeframe,
+  onTimeframe,
+  mark,
+  positions,
+  trades,
+  overlays,
+  focusTrade,
+}: Props) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const overlayRef = useRef({ positions, trades, overlays, symbol, timeframe });
+  overlayRef.current = { positions, trades, overlays, symbol, timeframe };
+  const [overlayCount, setOverlayCount] = useState({ visible: 0, total: 0 });
+  const [focusMessage, setFocusMessage] = useState("");
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -79,7 +106,10 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
   const bandsRef = useRef<(BandPoint | null)[]>([]);
   const levelsRef = useRef<Level[]>([]);
   const levelsVersionRef = useRef(-1);
-  const [status, setStatus] = useState<{ state: "loading" | "ready" | "error"; message?: string }>({ state: "loading" });
+  const [status, setStatus] = useState<{
+    state: "loading" | "ready" | "error";
+    message?: string;
+  }>({ state: "loading" });
   const [version, setVersion] = useState(0);
   const [retry, setRetry] = useState(0);
   const [readout, setReadout] = useState<Readout | null>(null);
@@ -107,8 +137,16 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
         vertLine: { color: "#5c554a", labelBackgroundColor: "#FF8C00" },
         horzLine: { color: "#5c554a", labelBackgroundColor: "#FF8C00" },
       },
-      rightPriceScale: { borderColor: "#2a2620", scaleMargins: { top: 0.08, bottom: 0.08 } },
-      timeScale: { borderColor: "#2a2620", timeVisible: true, secondsVisible: false, rightOffset: 2 },
+      rightPriceScale: {
+        borderColor: "#2a2620",
+        scaleMargins: { top: 0.08, bottom: 0.08 },
+      },
+      timeScale: {
+        borderColor: "#2a2620",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 2,
+      },
       localization: { priceFormatter: (p: number) => formatPrice(p) },
     });
     const candles = chart.addSeries(CandlestickSeries, {
@@ -146,7 +184,10 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
     ro.observe(host);
     // Canvas text is drawn once with whatever font is ready; redraw when Plex Mono arrives.
     document.fonts?.ready.then(() => {
-      if (!disposed) chart.applyOptions({ layout: { fontFamily: "'IBM Plex Mono', ui-monospace, monospace" } });
+      if (!disposed)
+        chart.applyOptions({
+          layout: { fontFamily: "'IBM Plex Mono', ui-monospace, monospace" },
+        });
     });
 
     chart.subscribeCrosshairMove((param) => {
@@ -155,13 +196,21 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
       if (!param.time || !param.point) {
         hoverRef.current = false;
         const i = bars.length - 1;
-        setReadout(i >= 0 ? { bar: bars[i], band: bandsRef.current[i] ?? null, live: true } : null);
+        setReadout(
+          i >= 0
+            ? { bar: bars[i], band: bandsRef.current[i] ?? null, live: true }
+            : null,
+        );
         return;
       }
       const i = param.logical === undefined ? -1 : Math.round(param.logical);
       if (i < 0 || i >= bars.length) return;
       hoverRef.current = true;
-      setReadout({ bar: bars[i], band: bandsRef.current[i] ?? null, live: i === bars.length - 1 });
+      setReadout({
+        bar: bars[i],
+        band: bandsRef.current[i] ?? null,
+        live: i === bars.length - 1,
+      });
     });
 
     return () => {
@@ -188,7 +237,16 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
     candles.setData(
       bars.map((b, i): CandlestickData<Time> => {
         const color = candleColor(b.c, bands[i]);
-        return { time: asTime(b.t), open: b.o, high: b.h, low: b.l, close: b.c, color, borderColor: color, wickColor: color };
+        return {
+          time: asTime(b.t),
+          open: b.o,
+          high: b.h,
+          low: b.l,
+          close: b.c,
+          color,
+          borderColor: color,
+          wickColor: color,
+        };
       }),
     );
     BAND_STYLE.forEach(({ key }, k) => {
@@ -209,18 +267,98 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
       time: asTime(bars[s.index].t),
       position: s.side === "buy" ? "belowBar" : "aboveBar",
       shape: s.side === "buy" ? "arrowUp" : "arrowDown",
-      color: s.side === "buy" ? (s.kind === "STRONG BUY" ? "#22c55e" : "#4ade80") : s.kind === "STRONG SELL" ? "#ef4444" : "#f87171",
+      color:
+        s.side === "buy"
+          ? s.kind === "STRONG BUY"
+            ? "#22c55e"
+            : "#4ade80"
+          : s.kind === "STRONG SELL"
+            ? "#ef4444"
+            : "#f87171",
       text: s.labeled ? s.kind : "",
       size: s.kind.startsWith("STRONG") ? 1.4 : 1,
     }));
-    markersRef.current?.setMarkers(markers);
+    const o = overlayRef.current;
+    const account = accountMarkers(
+      bars,
+      o.trades,
+      o.positions,
+      o.symbol,
+      o.timeframe,
+    );
+    setOverlayCount({ visible: account.visible, total: account.total });
+    const all = o.overlays ? [...markers, ...account.markers] : markers;
+    markersRef.current?.setMarkers(
+      all.sort((a, b) => Number(a.time) - Number(b.time)),
+    );
   };
+
+  useEffect(() => {
+    applyMarkers();
+  }, [trades, positions, overlays, version]);
+
+  useEffect(() => {
+    if (
+      !focusTrade ||
+      status.state !== "ready" ||
+      focusTrade.trade.symbol !== symbol
+    )
+      return;
+    const bars = barsRef.current;
+    const entry =
+      Number(
+        new Date(
+          typeof focusTrade.trade.openedAt === "number"
+            ? focusTrade.trade.openedAt < 1e12
+              ? focusTrade.trade.openedAt * 1000
+              : focusTrade.trade.openedAt
+            : focusTrade.trade.openedAt,
+        ),
+      ) / 1000;
+    const index = bars.findIndex(
+      (b) => entry >= b.t && entry < b.t + TIMEFRAME_SECONDS[timeframe],
+    );
+    if (index < 0) {
+      setFocusMessage(
+        "This entry is outside the 1,000 available candles. Try a longer timeframe.",
+      );
+      return;
+    }
+    const endMs = focusTrade.trade.closedAt;
+    const end =
+      endMs === null
+        ? entry
+        : Number(
+            new Date(
+              typeof endMs === "number"
+                ? endMs < 1e12
+                  ? endMs * 1000
+                  : endMs
+                : endMs,
+            ),
+          ) / 1000;
+    const endIndex = bars.findIndex(
+      (b) => end >= b.t && end < b.t + TIMEFRAME_SECONDS[timeframe],
+    );
+    chartRef.current
+      ?.timeScale()
+      .setVisibleLogicalRange({
+        from: Math.max(0, index - 25),
+        to: Math.min(bars.length + 2, Math.max(index + 25, endIndex + 15)),
+      });
+    setFocusMessage(
+      `Inspecting ${focusTrade.trade.symbol} ${focusTrade.trade.isLong ? "long" : "short"} entry · ${formatDateTime(focusTrade.trade.openedAt)} UTC`,
+    );
+    sectionRef.current?.scrollIntoView({ block: "start" });
+    sectionRef.current?.focus({ preventScroll: true });
+  }, [focusTrade, symbol, timeframe, version, status.state]);
 
   // Load candles for the selected market and timeframe. A newer request aborts the older one,
   // and a response that lands after unmount or after the selection changed is dropped.
   useEffect(() => {
     const ctrl = new AbortController();
     setStatus({ state: "loading" });
+    setFocusMessage("");
     backend
       .candles(symbol, timeframe, CANDLE_LIMIT, ctrl.signal)
       .then((rows) => {
@@ -231,18 +369,36 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
         chartRef.current.timeScale().setVisibleLogicalRange(range);
         chartRef.current.priceScale("right").applyOptions({ autoScale: true });
         const last = rows.length - 1;
-        setReadout(last >= 0 ? { bar: rows[last], band: bandsRef.current[last] ?? null, live: true } : null);
-        setStatus(rows.length ? { state: "ready" } : { state: "error", message: "The backend returned no candles for this market." });
+        setReadout(
+          last >= 0
+            ? {
+                bar: rows[last],
+                band: bandsRef.current[last] ?? null,
+                live: true,
+              }
+            : null,
+        );
+        setStatus(
+          rows.length
+            ? { state: "ready" }
+            : {
+                state: "error",
+                message: "The backend returned no candles for this market.",
+              },
+        );
         setVersion((v) => v + 1);
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
-        setStatus({ state: "error", message: err instanceof Error ? err.message : String(err) });
+        setStatus({
+          state: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
       });
     return () => ctrl.abort();
   }, [backend, symbol, timeframe, retry, applyAll]);
 
-  // Fold each streamed mark into the forming bar, or open a new bar when the bucket rolls over.
+  // Fold each polled mark into the forming bar, or open a new bar when the bucket rolls over.
   useEffect(() => {
     if (!mark || status.state !== "ready") return;
     const bars = barsRef.current;
@@ -253,7 +409,14 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
     const last = bars[bars.length - 1];
     if (bucket < last.t) return;
     if (bucket > last.t) {
-      bars.push({ t: bucket, o: last.c, h: Math.max(last.c, mark.price), l: Math.min(last.c, mark.price), c: mark.price, v: 0 });
+      bars.push({
+        t: bucket,
+        o: last.c,
+        h: Math.max(last.c, mark.price),
+        l: Math.min(last.c, mark.price),
+        c: mark.price,
+        v: 0,
+      });
       applyAll();
       setVersion((v) => v + 1);
     } else {
@@ -261,38 +424,71 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
       last.h = Math.max(last.h, mark.price);
       last.l = Math.min(last.l, mark.price);
       const closes = bars.slice(-15).map((b) => b.c);
-      const band = bars.length >= 15 ? bandLadder(closes)[closes.length - 1] : null;
+      const band =
+        bars.length >= 15 ? bandLadder(closes)[closes.length - 1] : null;
       bandsRef.current[bars.length - 1] = band;
       const color = candleColor(last.c, band);
-      candles.update({ time: asTime(last.t), open: last.o, high: last.h, low: last.l, close: last.c, color, borderColor: color, wickColor: color });
-      if (band) BAND_STYLE.forEach(({ key }, k) => bandRefs.current[k]?.update({ time: asTime(last.t), value: band[key] }));
+      candles.update({
+        time: asTime(last.t),
+        open: last.o,
+        high: last.h,
+        low: last.l,
+        close: last.c,
+        color,
+        borderColor: color,
+        wickColor: color,
+      });
+      if (band)
+        BAND_STYLE.forEach(({ key }, k) =>
+          bandRefs.current[k]?.update({
+            time: asTime(last.t),
+            value: band[key],
+          }),
+        );
     }
     if (!hoverRef.current) {
       const i = bars.length - 1;
-      setReadout({ bar: { ...bars[i] }, band: bandsRef.current[i] ?? null, live: true });
+      setReadout({
+        bar: { ...bars[i] },
+        band: bandsRef.current[i] ?? null,
+        live: true,
+      });
     }
   }, [mark, status.state, timeframe, applyAll]);
 
-  // Position price lines: entry, TP, SL, and bust only within 35% of mark. Each level also gets an
+  // Position price lines: entry and bust only within 35% of mark. Each level also gets an
   // invisible anchor series across every bar so autoscale keeps the line on screen.
   useEffect(() => {
     const chart = chartRef.current;
     const candles = candleRef.current;
     if (!chart || !candles) return;
     const levels: Level[] = [];
-    for (const p of positions) {
+    for (const p of overlays ? positions : []) {
       if (p.symbol !== symbol) continue;
       const side = p.isLong ? "Long" : "Short";
-      levels.push({ price: p.entry, color: LINE_COLORS.entry, style: LineStyle.Solid, title: `${side} entry` });
-      if (p.takeProfit) levels.push({ price: p.takeProfit, color: LINE_COLORS.tp, style: LineStyle.Solid, title: "TP" });
-      if (p.stopLoss) levels.push({ price: p.stopLoss, color: LINE_COLORS.sl, style: LineStyle.Solid, title: "SL" });
+      levels.push({
+        price: p.entry,
+        color: LINE_COLORS.entry,
+        style: LineStyle.Solid,
+        title: `${side} entry`,
+      });
       if (bustWithinRange(p.bustPrice, p.mark)) {
-        levels.push({ price: p.bustPrice, color: LINE_COLORS.bust, style: LineStyle.Dashed, title: "Bust" });
+        levels.push({
+          price: p.bustPrice,
+          color: LINE_COLORS.bust,
+          style: LineStyle.Dashed,
+          title: "Bust",
+        });
       }
     }
-    const key = (ls: Level[]) => ls.map((l) => `${l.title}@${l.price}`).join("|");
+    const key = (ls: Level[]) =>
+      ls.map((l) => `${l.title}@${l.price}`).join("|");
     const bars = barsRef.current;
-    if (key(levels) === key(levelsRef.current) && version === levelsVersionRef.current) return;
+    if (
+      key(levels) === key(levelsRef.current) &&
+      version === levelsVersionRef.current
+    )
+      return;
     levelsRef.current = levels;
     levelsVersionRef.current = version;
 
@@ -320,18 +516,31 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
       s.setData(bars.map((b) => ({ time: asTime(b.t), value: l.price })));
       return s;
     });
-  }, [positions, symbol, version]);
+  }, [positions, symbol, version, overlays]);
 
   const r = readout;
-  const z = r?.band && r.band.sd > 0 ? (r.bar.c - r.band.mid) / r.band.sd : null;
+  const z =
+    r?.band && r.band.sd > 0 ? (r.bar.c - r.band.mid) / r.band.sd : null;
   const change = r ? ((r.bar.c - r.bar.o) / r.bar.o) * 100 : null;
 
   return (
-    <section className="chart-panel" aria-label={`${symbol} price chart`}>
+    <section
+      ref={sectionRef}
+      tabIndex={-1}
+      id="market-chart"
+      className="chart-panel"
+      aria-label={`${symbol} price chart`}
+    >
       <div className="chart-toolbar">
         <div className="seg" role="group" aria-label="Timeframe">
           {TIMEFRAMES.map((tf) => (
-            <button key={tf} type="button" className="seg-btn" aria-pressed={tf === timeframe} onClick={() => onTimeframe(tf)}>
+            <button
+              key={tf}
+              type="button"
+              className="seg-btn"
+              aria-pressed={tf === timeframe}
+              onClick={() => onTimeframe(tf)}
+            >
               {tf}
             </button>
           ))}
@@ -339,17 +548,44 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
         <p className="readout num" aria-live="off">
           {r ? (
             <>
-              <span className="ro-k">O</span> {formatPrice(r.bar.o)} <span className="ro-k">H</span> {formatPrice(r.bar.h)}{" "}
-              <span className="ro-k">L</span> {formatPrice(r.bar.l)} <span className="ro-k">C</span>{" "}
-              <span className={change !== null && change < 0 ? "loss" : "profit"}>{formatPrice(r.bar.c)}</span>{" "}
-              <span className="ro-k">BB</span> {r.band ? formatPrice(r.band.mid) : "--"}{" "}
-              <span className="ro-k">SD</span> {z === null ? "--" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}`}
+              <span className="ro-k">O</span> {formatPrice(r.bar.o)}{" "}
+              <span className="ro-k">H</span> {formatPrice(r.bar.h)}{" "}
+              <span className="ro-k">L</span> {formatPrice(r.bar.l)}{" "}
+              <span className="ro-k">C</span>{" "}
+              <span
+                className={change !== null && change < 0 ? "loss" : "profit"}
+              >
+                {formatPrice(r.bar.c)}
+              </span>{" "}
+              <span className="ro-k">BB</span>{" "}
+              {r.band ? formatPrice(r.band.mid) : "--"}{" "}
+              <span className="ro-k">SD</span>{" "}
+              {z === null ? "--" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}`}
             </>
           ) : (
             <span className="ro-k">No bar under the crosshair</span>
           )}
         </p>
       </div>
+      {focusMessage && (
+        <p className="focus-message" role="status">
+          {focusMessage}{" "}
+          <button
+            className="btn btn-ghost"
+            type="button"
+            onClick={() => {
+              chartRef.current
+                ?.timeScale()
+                .setVisibleLogicalRange(
+                  initialRange(barsRef.current.length, 160),
+                );
+              setFocusMessage("");
+            }}
+          >
+            Reset view
+          </button>
+        </p>
+      )}
       <div className="chart-host" ref={hostRef}>
         {status.state !== "ready" && (
           <div className="chart-overlay" role="status">
@@ -360,7 +596,11 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
             ) : (
               <span>
                 Candles unavailable: {status.message}{" "}
-                <button type="button" className="btn btn-ghost" onClick={() => setRetry((n) => n + 1)}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setRetry((n) => n + 1)}
+                >
                   Retry
                 </button>
               </span>
@@ -374,6 +614,17 @@ export function Chart({ backend, symbol, timeframe, onTimeframe, mark, positions
         <span className="lg lg-lo">Lower 1, 1.5, 2 sd</span>
         <span className="lg lg-bust">Bust within 35%</span>
         <span className="ro-k">Times in UTC</span>
+      </p>
+      <p className="overlay-legend">
+        <span className="profit">▲ Long entry</span>
+        <span className="loss">▼ Short entry</span>
+        <span>■ Exit</span>
+        <span className="bust">✕ LIQ</span>
+        <span className="hint">
+          {overlays
+            ? `${overlayCount.visible}/${overlayCount.total} account events in loaded candles`
+            : "Account overlays hidden"}
+        </span>
       </p>
     </section>
   );

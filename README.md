@@ -1,160 +1,104 @@
 # PAPER DESK
 
-A private, single-user trading terminal front end for Papertrade (papertrade.xyz), a synthetic perps
-exchange on HyperEVM priced at Hyperliquid's BBO mid with up to 1000x leverage.
+A **read-only account viewer for Papertrade** (papertrade.xyz), the synthetic perps exchange on HyperEVM priced at Hyperliquid mid. Paste any public EVM address to inspect its BTC (instrumentId `0`) and ETH (instrumentId `1`) activity, with the existing BB(15) sigma ladder overlaid.
 
-The app is a static React + TypeScript + Vite build with lightweight-charts v5. It is **only a client of
-your own backend**: every request goes to same-origin relative paths under `/api`. It never calls
-Papertrade, Hyperliquid or any third party, never loads remote scripts, fonts or analytics, never uses
-`eval` or inline scripts, and never holds or asks for a private key, seed phrase or wallet. Signing is
-done by the backend's session key.
+There is no wallet connection, signing, session key, order ticket or transaction action. The browser sends only GET requests to its own origin under `/api`. Fonts, scripts and images are bundled locally. A backend implementing the contract below is needed for real account data; the static export does not contain or operate that service.
 
-## Install, preview, rebuild
+## Install, preview and rebuild
+
+The existing package manifest, lockfile and Vite configuration are preserved.
 
 ```sh
-npm ci                 # install from package-lock.json
-npm run dev            # dev server against a backend proxied at /api
-npm run dev:mock       # dev server with synthetic data (VITE_MOCK=1)
-npm test               # vitest unit tests (indicators, formatting, ticket validation, backoff)
-npm run typecheck      # tsc --noEmit
-npm run build          # typecheck, then production export to dist/
-npm run preview        # serve dist/ locally (add ?mock=1 to the URL to run without a backend)
+npm ci
+npm run dev             # frontend development; /api must be served on this origin
+npm run dev:mock        # development with synthetic data
+npm run typecheck
+npm test
+npm run build           # typecheck + Vite production export
+npm run preview         # preview dist; open ?mock=1 without a backend
 ```
 
-`dist/` is committed. It uses relative asset URLs (`base: "./"` in `vite.config.ts`), so it can be served
-from any subpath, an IPFS gateway or an ENS name. There is no client-side routing: one page, three tabs.
+`dist/index.html` and all required assets are included alongside the source and existing `package-lock.json`. Vite's `base: "./"` produces relative asset URLs for subpath hosting, IPFS gateways or an ENS name. Navigation uses a single page with tabs; no rewrite rules are needed. For real data, serve `/api/*` on the same origin as the export. The existing development configuration does not proxy `/api` to another server.
 
-In production, serve `dist/` from the **same origin** as the backend so `/api/*` and the WebSocket at
-`/api/stream` resolve to it. Opened on a host with no backend, the desk shows a "Backend not reachable"
-banner with a link to mock mode.
+## Address bar and mock mode
 
-## Mock mode
+- Paste or type `0x` followed by exactly 40 hexadecimal characters. Validation is case-insensitive; loaded addresses are trimmed and normalized to lowercase.
+- **Enter** loads the account and writes `?address=…` to the URL, preserving `?mock=1` when present. Shared URLs and browser Back/Forward restore the selected account.
+- **Esc** in the address bar, or **Clear**, clears the account and query parameter.
+- The dropdown stores the last ten unique addresses in this browser's `localStorage`. **Name address** adds or edits an optional nickname. If storage is unavailable, the current visit still works. No account is automatically loaded from storage.
+- **`?mock=1`** enables a separate, locally bundled synthetic backend for any valid address. `VITE_MOCK=1` also enables it at development/build time. The visible **MOCK DATA** badge always identifies this mode.
 
-Mock mode runs the full UI with no server. Turn it on with:
+Mock data is deterministic per address: BTC/ETH candles on all six timeframes, three open positions, 158 settled positions plus three Opened events, 83 cashflows (including a pending withdrawal), and portfolio curves. Prices move modestly on quote polls. Synthetic transactions have no invented transaction hash. Mock mode makes no API or third-party requests.
 
-- `VITE_MOCK=1` at build or dev time (`npm run dev:mock`), or
-- `?mock=1` in the page URL (works on the committed export).
+An unknown or empty account shows **“No activity for this account.”** A backend failure shows **ERROR**, keeps the last successful data and offers a retry; it never silently substitutes mock data.
 
-`src/mock.ts` implements the same `Backend` interface as the HTTP client: deterministic seeded candles
-for BTC and ETH on every timeframe, three open positions (one with TP/SL), 14 closed trades, an account
-that revalues on every mark tick, intents that queue for about 1.4 s and then confirm, and a stream that
-pushes `mark`, `positions`, `account` and `intent` messages once a second. The header shows **MOCK DATA**
-whenever it is active. Mock code is loaded with a dynamic `import()`, so it is a separate chunk that the
-live app never downloads.
+## Screens
 
-## Backend contract
+**F1 ACCOUNT** shows equity, all-time PnL, open PnL, PAPER minted, win rate, settled trade count and liquidation count. Select BTC/ETH and a timeframe, toggle account overlays, then inspect open positions and recent trades. Selecting a trade row (or its keyboard-accessible market button) scrolls to and zooms the chart around the entry/exit. If necessary, it chooses a longer timeframe to bring that trade into the available 1,000 candles.
 
-The typed client lives in `src/api.ts`. Timestamps may be unix seconds, unix milliseconds or ISO strings;
-candle `t` values in milliseconds are normalised to seconds.
+The existing indicator engine and its tests are unchanged: SMA(15), population standard deviation, the ±1/1.5/2σ ladder, candle colors, five-bar extreme signals, ten-bar same-side decluttering and initial 160-bar view. Indicator signals remain visible when account overlays are hidden.
 
-| Method | Path | Response |
-| --- | --- | --- |
-| GET | `/api/me` | `{user, wallet, sessionKey:{address, expiresAt}, limits:{maxMarginUsd, maxLeverage}}` |
-| GET | `/api/markets` | `[{instrumentId, symbol, mark, change24hPct, longOi, shortOi, maxLeverage}]` |
-| GET | `/api/candles?symbol=BTC&tf=15m&limit=1000` | `[{t,o,h,l,c,v}]`, `tf` in `1m 5m 15m 1h 4h 1d` |
-| GET | `/api/account` | `{equity, available, marginInUse, openPnl, queuedBalance}` |
-| GET | `/api/positions` | `[{positionId, symbol, isLong, sizeUsd, marginUsd, leverage, entry, mark, pnlUsd, pnlPct, bustPrice, openedAt}]` plus optional `takeProfit`, `stopLoss` prices |
-| GET | `/api/history?limit=200` | `[{positionId, symbol, isLong, sizeUsd, leverage, entry, exit, pnlUsd, fees, openedAt, closedAt}]` |
-| POST | `/api/orders/open` | body `{symbol, isLong, marginUsd, leverage, takeProfitPct?, stopLossPct?}` → `{intentId, status}` |
-| POST | `/api/orders/close` | body `{positionIds:[...]}` → `{intentId, status}` |
-| POST | `/api/orders/close-all` | → `{intentId, status}` |
-| GET | `/api/intents/:id` | `{status: queued\|confirmed\|failed\|reverted\|expired\|cancelled, error?}` |
-| WS | `/api/stream` | `{type:'mark'\|'positions'\|'account'\|'intent', data}` |
+Account overlays add a green up arrow below long-entry bars, red down arrow above short-entry bars, small neutral exit squares, and hot-pink `#FF2D78` **✕ LIQ** liquidation markers. Because lightweight-charts v5 has no X-shaped built-in marker, liquidations use a zero-size square with the literal X and LIQ text. Open-position entry lines are gray and solid; bust lines are hot pink and dashed only within 35% of mark. The existing invisible anchors keep position levels in autoscale. A counter reports events inside loaded candle history; events outside it are never snapped to an unrelated bar.
 
-Notes for backend implementers:
+**F2 HISTORY** provides separate 75-row pages for trades and cashflows. Market, side and outcome filters compose for trades; cashflows have kind and status filters. Outcome includes Win/Loss and the backend event kinds. Each CSV exports **all matching loaded history**, across pages, with raw amounts, UTC dates and full hashes when supplied. Cells are quoted and formula-like text is escaped for spreadsheets.
 
-- Requests send `credentials: "same-origin"`; authenticate with a cookie on the same origin.
-- Errors: any non-2xx status. A JSON body `{error}` or `{message}` is shown to the user.
-- `mark` stream data may be one `{symbol, mark, t?}` or an array of them. `intent` data is
-  `{intentId, status, error?}`.
-- `takeProfitPct` / `stopLossPct` are percent **price moves from entry** (not percent of margin). The
-  ticket rejects a stop loss at or beyond the bust distance (`100 / leverage` %).
-- The chart draws TP and SL lines only when `/api/positions` returns `takeProfit` / `stopLoss` prices.
-- After an order the client polls `/api/intents/:id` once a second (90 tries at most) unless the stream
-  settles the intent first.
-- The WebSocket reconnects with backoff from 500 ms doubling to 15 s with up to 20% jitter. The header
-  reads CONNECTING, LIVE or RECONNECTING.
+**F3 ANALYSIS** provides an equity area curve or PnL line curve with `1d`, `1w` and `all` ranges. Pure functions in `src/stats.ts` calculate win rate, mean/median PnL, best/worst trade, profit factor, average leverage/hold time, liquidation rate and PnL groups by market/side. The entry histogram uses each entry price relative to the containing candle's BB(15), with a selectable candle timeframe and per-bucket settled win rate.
 
-## Content-Security-Policy
+**F1–F3** work globally. Inside the tab bar, arrows, Home and End use roving focus. Times and CSV dates are always **UTC**.
 
-`index.html` ships this meta tag, unchanged in `dist/index.html`:
+## Read-only backend contract
 
+Every request is an explicit GET with `Accept: application/json` and `credentials: "same-origin"`. The client has no request body, WebSocket, intent or mutation method. The typed contract is in `src/api.ts`.
+
+| GET path | Response |
+| --- | --- |
+| `/api/markets` | `[{instrumentId, symbol, mark, change24hPct, volume24hUsd}]` |
+| `/api/candles?symbol=BTC&tf=15m&limit=1000` | `[{t,o,h,l,c,v}]` |
+| `/api/accounts/:address/summary` | `{address, equity, pnl, paperMinted, stakingRewards, asOf}` |
+| `/api/accounts/:address/portfolio?range=1d` | `{points:[{t,equity,pnl}]}` |
+| `/api/accounts/:address/positions` | `[{positionId,symbol,isLong,marginUsd,leverage,sizeUsd,entry,mark,pnlUsd,pnlPct,bustPrice,openedAt}]` |
+| `/api/accounts/:address/trades?cursor=&limit=75` | `{items:[{positionId,symbol,isLong,kind,marginUsd,leverage,entry,exit,pnlUsd,feeUsd,paperMinted,openedAt,closedAt,txHash}],nextCursor}` |
+| `/api/accounts/:address/cashflows?cursor=&limit=75` | `{items:[{t,kind,amountUsd,route,status,txHash}],nextCursor}` |
+
+- Candle timeframe: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`. Candle `t` is a bar-open Unix timestamp in seconds; millisecond values are normalized, sorted and deduplicated on receipt.
+- Other timestamps may be Unix seconds, milliseconds or ISO strings. Send ISO strings with a timezone. `portfolio` ranges are `1d`, `1w`, `all`.
+- Trade kinds: `Closed`, `Liquidated`, `TakeProfit`, `StopLoss`, `Opened`. An Opened event may have `exit: null`, `closedAt: null`; an unavailable `txHash` may be `null`. Trade PnL is used as reported; fees are displayed but not subtracted a second time.
+- Cashflow kinds: `Deposit`, `Withdrawal`. `route` and `status` are display strings. End pagination with `nextCursor: null` (an empty string is also treated as the end). Cursors are opaque and URL-encoded.
+- The client follows all cursor pages before replacing the history snapshot, sorts events newest first and rejects repeated cursors. Pagination/filtering/CSV/statistics then operate over this complete snapshot. Very large accounts consequently require memory proportional to their returned history.
+- Empty accounts may return empty arrays/pages and a zero summary. Account endpoint **404s** are normalized to empty results; other non-2xx responses remain errors. Market/candle 404s are errors. Individual HTTP requests time out after 12 seconds and can be aborted when the address changes or the tab hides.
+- Summary and positions poll every **5 seconds**; trades and cashflows every **30 seconds**. Market quotes also poll every 5 seconds. Requests pause while the document is hidden and both account groups refresh on return. In-flight groups do not overlap.
+- The header reads **LIVE** after both account groups succeed; **STALE** while hidden, after 15 seconds without a fast snapshot, after 65 seconds without history, or if summary `asOf` is over 15 seconds old; **ERROR** after an account-group failure. **IDLE** and **LOADING** describe initial states. Chart/portfolio errors have local recovery controls.
+
+### Statistical definitions and limits
+
+Statistics deduplicate by `positionId` and keep the latest terminal event. Opened events do not count as settled trades. Win rate uses profitable settlements divided by all settlements, including break-even trades. Profit factor is total positive PnL divided by absolute total negative PnL: infinity for profit without losses, zero for losses without profit, and unavailable when neither exists. Average hold uses valid nonnegative close-minus-open times.
+
+The sigma histogram deduplicates entry events, uses the entry's market and exact containing timeframe bucket, and never borrows a candle across a gap. Its win rates exclude unsettled entries. Up to 1,000 candles per market are available through this contract; older entries, warmup bars, missing bars and zero-deviation windows remain visibly **unclassified**. A longer timeframe can increase coverage. The containing candle's final close is included in its band calculation; this is historical candle context, not an intrabar replay or a backtest of what was knowable at the exact entry instant. Entries beyond the longest returned history cannot be reconstructed by this frontend.
+
+`paperMinted` and `stakingRewards` are displayed as PAPER quantities; monetary fields/curves are USD. All-time PnL and equity come from the summary endpoint, independently of computed trade statistics.
+
+## Content Security Policy and assets
+
+The production HTML retains:
+
+```text
+default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'
 ```
-default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self';
-font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'
-```
 
-The first five directives are the required policy; the last four only tighten it. To make it work:
-
-- IBM Plex Mono (latin 400 and 600, from `@fontsource/ibm-plex-mono`) is bundled as woff2/woff files in
-  `dist/assets`. `assetsInlineLimit: 0` keeps fonts out of `data:` URIs.
-- All CSS is one external stylesheet. No `style=` attributes are written in JSX.
-- Vite's dev server injects an inline React-refresh script, so a dev-only plugin in `vite.config.ts`
-  strips the CSP tag while serving. `vite build` keeps it.
-- `connect-src 'self'` covers `ws:`/`wss:` to the same host in current browsers.
-- Prefer sending the same policy as an HTTP header from your server too. `frame-ancestors` only works as
-  a header.
-
-## Features
-
-- **Header strip**: shortened wallet (full address on hover), equity, available, margin in use, open PnL,
-  session key expiry countdown (red under 30 minutes), stream state.
-- **F1 TRADE**: chart, open-positions table with per-row Close and a confirmed Close all, and the order
-  ticket (market, long/short, margin, log-scale leverage slider 1 to 1000x with presets 10/50/100/250/500/1000,
-  optional TP/SL percent, live notional and bust preview, then a confirm dialog that restates side, size,
-  margin, leverage, entry and bust price). Intent status shows in toasts.
-- **F2 POSITIONS & HISTORY**: full positions table and closed trades with net PnL, fees and win rate.
-- **F3 ANALYSIS**: market overview (mark, 24h change, long/short OI, long share, max leverage). The tab is
-  reserved for more analysis tools.
-- **Keyboard**: F1–F3 tabs (arrow keys, Home and End inside the tab bar), `L` long, `S` short, `M` focus
-  margin, `R` review, `Enter` in the ticket reviews, `Esc` cancels a dialog.
-
-### Chart (`src/components/Chart.tsx`, math in `src/indicators.ts`)
-
-- Candlesticks with vertical and horizontal grid lines hidden, timeframes 1m to 1d, initial zoom on the
-  last 160 bars, and a crosshair readout (OHLC, BB midline, z-score in sd).
-- BB(15): SMA(15) midline `#6366f1`, ±1, 1.5 and 2 population sd. Upper bands are red shades, lower bands
-  green shades, all 1px.
-- Candle body, border and wick colour by where the close sits in the ladder: `>= +2sd #7f1d1d`,
-  `+1.5..+2 #dc2626`, `+1..+1.5 #f97316`, `mid..+1 #f59e0b`, `-1..mid #84cc16`, `-1.5..-1 #4ade80`,
-  `-2..-1.5 #16a34a`, `<= -2sd #14532d`.
-- Signals at local extremes with a 5-bar lookback on each side: BUY when the low is at or below the lower
-  1.5sd band (STRONG BUY at 2sd), SELL when the high is at or above the upper 1.5sd band (STRONG SELL at
-  2sd). Within a same-side cluster (bars closer than 10) only the most extreme signal keeps its label.
-- Position lines: entry grey solid, TP green, SL red, bust `#FF2D78` dashed only within 35% of mark. Each
-  level has an invisible line series across every bar so autoscale keeps it on screen.
-- Resize goes through a ResizeObserver and one animation frame, both ignored after unmount. Candle
-  requests are aborted when the market or timeframe changes. Streamed marks update only the forming bar.
-
-## Project layout
-
-```
-index.html            CSP, title, description, og tags, favicon
-public/               favicon.svg, og.png (1200x630 capture of the mock desk)
-src/api.ts            types, HTTP client, WebSocket with backoff, mock switch
-src/mock.ts           synthetic backend for mock mode
-src/indicators.ts     SMA, population sd, band ladder, colours, signals, declutter, order math
-src/format.ts         fixed-decimal money, prices (sub-penny), percent, time
-src/leverage.ts       log-scale slider mapping, ticket validation
-src/components/       Header, Chart, TradeTicket, Tables, Dialog, Toasts
-src/*.test.ts         vitest suites
-dist/                 committed production export
-DESIGN.md             design system of the implemented UI
-artifacts/validation.md  checks run, results and limitations
-```
+IBM Plex Mono Latin 400/600 is bundled from the existing font dependency as WOFF/WOFF2. Production has external CSS/JS, no inline script, no remote assets or analytics. The unchanged development-only Vite plugin strips the CSP for React refresh; the production export retains it. Local favicon, description, title, Open Graph metadata and a refreshed 1200×630 read-only share image are included.
 
 ## Validation
 
-Commands run on the final source (full record in `artifacts/validation.md`):
+Actual results and the six-domain Better Interface review are in [artifacts/validation.md](artifacts/validation.md). The worker ran the production build and typecheck, the unchanged indicator suite plus new statistics/interaction-related unit tests, browser interaction checks against the export under `/preview/`, and the pinned taste probe. Screenshots and compact machine-readable results are included in `artifacts/`.
 
-| Command | Result |
+| Check | Result |
 | --- | --- |
-| `npm run typecheck` | passed, no errors |
-| `npm test` | 2 files, 60 tests passed |
-| `npm run build` | passed; JS 366.6 kB (118.2 kB gzip), CSS 13.1 kB, mock chunk 4.9 kB |
-| Playwright interaction script (Chromium, export served under `/preview/`) | 39 of 39 checks passed |
-| taste@1 probe on `dist/` | 15/16: `render` fails only on the expected 404s from `/api` on a static host with no backend |
-| taste@1 probe on `dist/?mock=1` | 16/16 |
+| `npm run typecheck` and `npm run build` | Passed; complete production export included |
+| `npm test` | 88 tests passed in 4 files, including 40 unchanged indicator tests |
+| Chromium interactions on the production export | 31/31 passed, including GET-only paths, visibility-aware polling and CSV downloads |
+| Axe on empty selection and all three loaded screens | Zero violations; manual-review items remain documented |
+| Pinned taste probe, empty and mock-account states | 15/16 each; monospace prose retained for the requested Bloomberg look |
 
-Not performed: WebKit/Safari (no WebKit build on this machine), screen reader, native 200% zoom, a
-physical device, and a test against a real backend (none was supplied).
+Build/test commands ran in a temporary copy with the unchanged manifest and lockfile, keeping installed dependencies out of the repository. The complete checked export was copied into `dist/`.
+
+Real backend integration, a physical device, a screen reader and Safari/WebKit remain unverified. WebKit was installed but could not launch because this machine lacks its required shared libraries. The HTTP integration checks used intercepted same-origin responses; the mock checks used the actual exported mock implementation.

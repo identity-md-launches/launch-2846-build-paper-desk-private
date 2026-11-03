@@ -1,78 +1,242 @@
-import { useEffect, useState } from "react";
-import type { Account, Me, StreamState } from "../api";
-import { formatCountdown, formatUsd, shortAddress, toMs } from "../format";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  normaliseAddress,
+  readRecent,
+  RECENT_KEY,
+  rememberAddress,
+  type RecentAddress,
+} from "../address";
+import type { FeedStatus } from "../useAccount";
+import { formatDateTime } from "../format";
 
 interface Props {
-  me: Me | null;
-  account: Account | null;
-  stream: StreamState;
+  address: string;
+  onLoad: (address: string) => void;
+  status: FeedStatus;
   mock: boolean;
+  asOf?: number | string;
 }
-
-const STREAM_LABEL: Record<StreamState, string> = {
-  connecting: "CONNECTING",
-  live: "LIVE",
-  reconnecting: "RECONNECTING",
-};
-
-export function Header({ me, account, stream, mock }: Props) {
-  const [now, setNow] = useState(() => Date.now());
+export function Header({ address, onLoad, status, mock, asOf }: Props) {
+  const [draft, setDraft] = useState(
+    () => new URLSearchParams(location.search).get("address") ?? "",
+  );
+  const [error, setError] = useState("");
+  const [recent, setRecent] = useState<RecentAddress[]>(() => {
+    try {
+      return readRecent(localStorage);
+    } catch {
+      return [];
+    }
+  });
+  const [nickname, setNickname] = useState("");
+  const [storageNotice, setStorageNotice] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const persist = (next: RecentAddress[]) => {
+    setRecent(next);
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      setStorageNotice("");
+    } catch {
+      setStorageNotice(
+        "Recent addresses are available for this visit only; browser storage is unavailable.",
+      );
+    }
+  };
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 15_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const expiresMs = toMs(me?.sessionKey.expiresAt);
-  const expiringSoon = expiresMs !== null && expiresMs - now < 30 * 60_000;
-  const pnl = account?.openPnl ?? null;
-
+    const query = new URLSearchParams(location.search).get("address") ?? "";
+    if (!address && query && !normaliseAddress(query)) {
+      setDraft(query);
+      setError(
+        "Use 0x followed by exactly 40 hexadecimal characters (0–9, a–f).",
+      );
+    } else {
+      setDraft(address);
+      setError("");
+    }
+  }, [address]);
+  useEffect(() => {
+    if (!address) return;
+    setRecent((prev) => {
+      const next = rememberAddress(prev, address);
+      try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      } catch {
+        setStorageNotice(
+          "Recent addresses are available for this visit only; browser storage is unavailable.",
+        );
+      }
+      return next;
+    });
+  }, [address]);
+  useEffect(() => {
+    setNickname(recent.find((x) => x.address === address)?.nickname ?? "");
+  }, [recent, address]);
+  const load = (e: FormEvent) => {
+    e.preventDefault();
+    const normal = normaliseAddress(draft);
+    if (!normal) {
+      setError(
+        "Use 0x followed by exactly 40 hexadecimal characters (0–9, a–f).",
+      );
+      inputRef.current?.focus();
+      return;
+    }
+    setError("");
+    setDraft(normal);
+    onLoad(normal);
+    persist(rememberAddress(recent, normal));
+  };
+  const clear = () => {
+    setDraft("");
+    setError("");
+    onLoad("");
+    inputRef.current?.focus();
+  };
   return (
-    <header className="topbar">
-      <div className="brand">
-        <img src="./favicon.svg" alt="" width="20" height="20" />
-        <span className="brand-name">PAPER DESK</span>
-        {mock && (
-          <span className="badge badge-mock" title="Mock mode: every number on this page is synthetic">
-            MOCK DATA
+    <header className="header">
+      <div className="topbar">
+        <a className="brand" href="./" aria-label="PAPER DESK home">
+          <img src="./favicon.svg" alt="" width="22" height="22" />
+          <h1>PAPER DESK</h1>
+        </a>
+        <p className="product-label">
+          Papertrade account viewer <span className="readonly">Read only</span>
+        </p>
+        <div className="connection">
+          <span className="badge">HyperEVM</span>
+          {mock && <span className="badge badge-mock">MOCK DATA</span>}
+          <span className={`conn conn-${status.toLowerCase()}`} role="status">
+            <span className="conn-dot" aria-hidden="true" />
+            {status}
           </span>
-        )}
+        </div>
       </div>
-      <dl className="metrics">
-        <div className="metric">
-          <dt>WALLET</dt>
-          <dd className="num" title={me?.wallet}>
-            {shortAddress(me?.wallet)}
-          </dd>
+      <form
+        className="addressbar"
+        onSubmit={load}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            clear();
+          }
+        }}
+      >
+        <label htmlFor="account-address">Public address</label>
+        <div className="address-controls">
+          <input
+            ref={inputRef}
+            id="account-address"
+            name="address"
+            className="input address-input"
+            type="text"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="Paste a public 0x address"
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError("");
+            }}
+            aria-invalid={!!error}
+            aria-describedby={error ? "address-error" : "address-hint"}
+          />
+          <button className="btn btn-primary" type="submit">
+            Load account <span aria-hidden="true">↵</span>
+          </button>
+          <button
+            className="btn btn-ghost"
+            type="button"
+            onClick={clear}
+            disabled={!draft && !address}
+          >
+            Clear
+          </button>
         </div>
-        <div className="metric">
-          <dt>EQUITY</dt>
-          <dd className="num">{formatUsd(account?.equity)}</dd>
+        <div className="address-tools">
+          <label className="sr-only" htmlFor="recent-addresses">
+            Recent addresses
+          </label>
+          <select
+            id="recent-addresses"
+            className="input recent-select"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) {
+                onLoad(e.target.value);
+                setDraft(e.target.value);
+                persist(rememberAddress(recent, e.target.value));
+              }
+            }}
+          >
+            <option value="">Recent addresses ({recent.length})</option>
+            {recent.map((r) => (
+              <option key={r.address} value={r.address}>
+                {r.nickname ? `${r.nickname} · ` : ""}
+                {r.address}
+              </option>
+            ))}
+          </select>
+          {address && (
+            <details className="nickname-editor">
+              <summary>Name address</summary>
+              <div className="nickname-content">
+                <label htmlFor="nickname">Nickname (optional)</label>
+                <input
+                  className="input"
+                  id="nickname"
+                  value={nickname}
+                  maxLength={40}
+                  onChange={(e) => setNickname(e.target.value)}
+                  placeholder="e.g. Research desk"
+                />
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    persist(rememberAddress(recent, address, nickname));
+                    document
+                      .querySelector<HTMLDetailsElement>(".nickname-editor")
+                      ?.removeAttribute("open");
+                  }}
+                >
+                  Save nickname
+                </button>
+              </div>
+            </details>
+          )}
         </div>
-        <div className="metric">
-          <dt>AVAILABLE</dt>
-          <dd className="num">{formatUsd(account?.available)}</dd>
+        <p id="address-hint" className="address-hint">
+          Enter to load · Esc to clear. Any public account, no connection
+          needed.
+        </p>
+        <p className="error address-error" id="address-error" role="alert">
+          {error}
+        </p>
+        {storageNotice && (
+          <p className="hint storage-notice" role="status">
+            {storageNotice}
+          </p>
+        )}
+      </form>
+      {address && (
+        <div className="account-identity">
+          <p>
+            <span className="ro-k">Viewing</span>{" "}
+            {recent.find((r) => r.address === address)?.nickname && (
+              <strong>
+                {recent.find((r) => r.address === address)?.nickname} ·{" "}
+              </strong>
+            )}
+            <span className="full-address">{address}</span>
+          </p>
+          <p className="hint">
+            {asOf
+              ? `As of ${formatDateTime(asOf)} UTC`
+              : "Loading account snapshot…"}
+          </p>
         </div>
-        <div className="metric">
-          <dt>MARGIN</dt>
-          <dd className="num">{formatUsd(account?.marginInUse)}</dd>
-        </div>
-        <div className="metric">
-          <dt>OPEN PNL</dt>
-          <dd className={`num ${pnl === null ? "" : pnl < 0 ? "loss" : pnl > 0 ? "profit" : ""}`}>
-            {formatUsd(pnl, { sign: true })}
-          </dd>
-        </div>
-        <div className="metric">
-          <dt>SESSION KEY</dt>
-          <dd className={`num ${expiringSoon ? "loss" : ""}`} title={me ? `Session key ${me.sessionKey.address}` : undefined}>
-            {formatCountdown(me?.sessionKey.expiresAt, now)}
-          </dd>
-        </div>
-      </dl>
-      <p className={`conn conn-${stream}`} role="status">
-        <span className="conn-dot" aria-hidden="true" />
-        {STREAM_LABEL[stream]}
-      </p>
+      )}
     </header>
   );
 }

@@ -1,0 +1,146 @@
+{
+  "axe": [
+    {
+      "tab": "Empty account selection",
+      "violations": []
+    },
+    {
+      "tab": "F1 ACCOUNT",
+      "violations": [],
+      "incomplete": [
+        "color-contrast"
+      ]
+    },
+    {
+      "tab": "F2 HISTORY",
+      "violations": [],
+      "incomplete": [
+        "color-contrast"
+      ]
+    },
+    {
+      "tab": "F3 ANALYSIS",
+      "violations": [],
+      "incomplete": [
+        "aria-prohibited-attr",
+        "color-contrast"
+      ]
+    }
+  ],
+  "contrast": [
+    {
+      "selector": ".brand",
+      "foreground": "rgb(255, 140, 0)",
+      "background": "rgb(5, 6, 7)",
+      "ratio": 8.693980400070435
+    },
+    {
+      "selector": ".hint",
+      "foreground": "rgb(143, 134, 118)",
+      "background": "rgb(5, 6, 7)",
+      "ratio": 5.6389840639775874
+    },
+    {
+      "selector": ".profit",
+      "foreground": "rgb(34, 197, 94)",
+      "background": "rgb(5, 6, 7)",
+      "ratio": 8.89958118140502
+    },
+    {
+      "selector": ".loss",
+      "foreground": "rgb(239, 68, 68)",
+      "background": "rgb(5, 6, 7)",
+      "ratio": 5.388780431796036
+    },
+    {
+      "selector": ".bust",
+      "foreground": "rgb(255, 45, 120)",
+      "background": "rgb(5, 6, 7)",
+      "ratio": 5.695957117050209
+    },
+    {
+      "selector": ".btn-primary",
+      "foreground": "rgb(5, 6, 7)",
+      "background": "rgb(255, 163, 51)",
+      "ratio": 10.176686175481596
+    }
+  ],
+  "resources": [
+    {
+      "tab": "F1 ACCOUNT",
+      "width": 320,
+      "scrollWidth": 320,
+      "clip": []
+    },
+    {
+      "tab": "F2 HISTORY",
+      "width": 320,
+      "scrollWidth": 320,
+      "clip": []
+    },
+    {
+      "tab": "F3 ANALYSIS",
+      "width": 320,
+      "scrollWidth": 320,
+      "clip": []
+    },
+    {
+      "tab": "F1 ACCOUNT",
+      "width": 390,
+      "scrollWidth": 390,
+      "clip": []
+    },
+    {
+      "tab": "F2 HISTORY",
+      "width": 390,
+      "scrollWidth": 390,
+      "clip": []
+    },
+    {
+      "tab": "F3 ANALYSIS",
+      "width": 390,
+      "scrollWidth": 390,
+      "clip": []
+    },
+    {
+      "tab": "F1 ACCOUNT",
+      "width": 760,
+      "scrollWidth": 760,
+      "clip": []
+    },
+    {
+      "tab": "F2 HISTORY",
+      "width": 760,
+      "scrollWidth": 760,
+      "clip": []
+    },
+    {
+      "tab": "F3 ANALYSIS",
+      "width": 760,
+      "scrollWidth": 760,
+      "clip": []
+    },
+    {
+      "tab": "F1 ACCOUNT",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "clip": []
+    },
+    {
+      "tab": "F2 HISTORY",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "clip": []
+    },
+    {
+      "tab": "F3 ANALYSIS",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "clip": []
+    }
+  ],
+  "focus": {
+    "outline": "rgb(255, 140, 0) solid 2px",
+    "offset": "2px"
+  }
+}

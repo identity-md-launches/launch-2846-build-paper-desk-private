@@ -1,6 +1,4 @@
-// Typed client for our own backend. Every request is a same-origin relative path under /api;
-// the app never talks to Papertrade, Hyperliquid or any third party, and never handles a key.
-
+/** Read-only client. Every network request is a GET to this origin's /api. */
 export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 export const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
 export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
@@ -11,29 +9,15 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   "4h": 14400,
   "1d": 86400,
 };
-
-/** Timestamps are accepted as unix seconds, unix milliseconds or ISO strings (see format.toMs). */
 export type Timestamp = number | string;
-
-export interface Me {
-  user: string;
-  wallet: string;
-  sessionKey: { address: string; expiresAt: Timestamp };
-  limits: { maxMarginUsd: number; maxLeverage: number };
-}
-
 export interface Market {
-  instrumentId: number | string;
+  instrumentId: number;
   symbol: string;
   mark: number;
   change24hPct: number;
-  longOi: number;
-  shortOi: number;
-  maxLeverage: number;
+  volume24hUsd: number;
 }
-
 export interface Candle {
-  /** Bar open time, unix seconds (milliseconds are normalised on receipt). */
   t: number;
   o: number;
   h: number;
@@ -41,95 +25,96 @@ export interface Candle {
   c: number;
   v: number;
 }
-
-export interface Account {
+export interface Summary {
+  address: string;
   equity: number;
-  available: number;
-  marginInUse: number;
-  openPnl: number;
-  queuedBalance: number;
+  pnl: number;
+  paperMinted: number;
+  stakingRewards: number;
+  asOf: Timestamp;
 }
-
+export type PortfolioRange = "1d" | "1w" | "all";
+export interface PortfolioPoint {
+  t: Timestamp;
+  equity: number;
+  pnl: number;
+}
+export interface Portfolio {
+  points: PortfolioPoint[];
+}
 export interface Position {
   positionId: string;
   symbol: string;
   isLong: boolean;
-  sizeUsd: number;
   marginUsd: number;
   leverage: number;
+  sizeUsd: number;
   entry: number;
   mark: number;
   pnlUsd: number;
   pnlPct: number;
   bustPrice: number;
   openedAt: Timestamp;
-  /** Optional trigger prices; the chart draws TP / SL lines only when the backend sends them. */
-  takeProfit?: number | null;
-  stopLoss?: number | null;
 }
-
-export interface ClosedTrade {
+export type TradeKind =
+  "Closed" | "Liquidated" | "TakeProfit" | "StopLoss" | "Opened";
+export interface Trade {
   positionId: string;
   symbol: string;
   isLong: boolean;
-  sizeUsd: number;
-  leverage: number;
-  entry: number;
-  exit: number;
-  pnlUsd: number;
-  fees: number;
-  openedAt: Timestamp;
-  closedAt: Timestamp;
-}
-
-export interface OpenOrder {
-  symbol: string;
-  isLong: boolean;
+  kind: TradeKind;
   marginUsd: number;
   leverage: number;
-  takeProfitPct?: number;
-  stopLossPct?: number;
+  entry: number;
+  exit: number | null;
+  pnlUsd: number;
+  feeUsd: number;
+  paperMinted: number;
+  openedAt: Timestamp;
+  closedAt: Timestamp | null;
+  txHash: string | null;
 }
-
-export type IntentStatus = "queued" | "confirmed" | "failed" | "reverted" | "expired" | "cancelled";
-export const TERMINAL_STATUSES: IntentStatus[] = ["confirmed", "failed", "reverted", "expired", "cancelled"];
-
-export interface IntentAck {
-  intentId: string;
-  status: IntentStatus;
+export interface Cashflow {
+  t: Timestamp;
+  kind: "Deposit" | "Withdrawal";
+  amountUsd: number;
+  route: string;
+  status: string;
+  txHash: string | null;
 }
-
-export interface Intent {
-  status: IntentStatus;
-  error?: string;
+export interface Page<T> {
+  items: T[];
+  nextCursor: string | null;
 }
-
-export type MarkUpdate = { symbol: string; mark: number; t?: Timestamp };
-
-export type StreamMessage =
-  | { type: "mark"; data: MarkUpdate | MarkUpdate[] }
-  | { type: "positions"; data: Position[] }
-  | { type: "account"; data: Account }
-  | { type: "intent"; data: Intent & { intentId: string } };
-
-export type StreamState = "connecting" | "live" | "reconnecting";
-
 export interface Backend {
   readonly mock: boolean;
-  me(): Promise<Me>;
-  markets(): Promise<Market[]>;
-  candles(symbol: string, tf: Timeframe, limit: number, signal?: AbortSignal): Promise<Candle[]>;
-  account(): Promise<Account>;
-  positions(): Promise<Position[]>;
-  history(limit: number): Promise<ClosedTrade[]>;
-  openOrder(order: OpenOrder): Promise<IntentAck>;
-  closePositions(positionIds: string[]): Promise<IntentAck>;
-  closeAll(): Promise<IntentAck>;
-  intent(intentId: string): Promise<Intent>;
-  /** Opens the push stream; returns a function that closes it for good. */
-  stream(onMessage: (m: StreamMessage) => void, onState: (s: StreamState) => void): () => void;
+  markets(signal?: AbortSignal): Promise<Market[]>;
+  candles(
+    symbol: string,
+    tf: Timeframe,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<Candle[]>;
+  summary(address: string, signal?: AbortSignal): Promise<Summary>;
+  portfolio(
+    address: string,
+    range: PortfolioRange,
+    signal?: AbortSignal,
+  ): Promise<Portfolio>;
+  positions(address: string, signal?: AbortSignal): Promise<Position[]>;
+  trades(
+    address: string,
+    cursor?: string,
+    limit?: number,
+    signal?: AbortSignal,
+  ): Promise<Page<Trade>>;
+  cashflows(
+    address: string,
+    cursor?: string,
+    limit?: number,
+    signal?: AbortSignal,
+  ): Promise<Page<Cashflow>>;
 }
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -140,120 +125,140 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
-
 export const API_BASE = "/api";
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    credentials: "same-origin",
-    headers: { Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) },
-  });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const body = (await res.json()) as { error?: string; message?: string };
-      detail = body.error ?? body.message ?? "";
-    } catch {
-      /* not JSON */
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, 12_000);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      // Display status, not arbitrary server text, to keep errors concise and trustworthy.
+      throw new ApiError(
+        `HTTP ${res.status}`,
+        res.status,
+        `${API_BASE}${path}`,
+      );
     }
-    throw new ApiError(detail || `HTTP ${res.status}`, res.status, `${API_BASE}${path}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
-  return (await res.json()) as T;
 }
-
-const post = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
-
-/** Reconnect delay: 500ms doubling to a 15s ceiling, with up to 20% jitter. */
-export function backoffDelay(attempt: number, random = Math.random): number {
-  const base = Math.min(15000, 500 * 2 ** attempt);
-  return Math.round(base * (1 - 0.2 * random()));
+const accountPath = (address: string) => {
+  if (!/^0x[0-9a-f]{40}$/i.test(address))
+    throw new Error("Use a public 0x address with 40 hexadecimal characters.");
+  return `/accounts/${address.toLowerCase()}`;
+};
+async function emptyOnUnknown<T>(work: () => Promise<T>, empty: T): Promise<T> {
+  try {
+    return await work();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return empty;
+    throw err;
+  }
 }
-
-function normaliseCandles(rows: Candle[]): Candle[] {
+export function normaliseCandles(rows: Candle[]): Candle[] {
   return rows
-    .map((r) => ({ ...r, t: r.t > 1e12 ? Math.floor(r.t / 1000) : r.t }))
+    .map((r) => ({
+      ...r,
+      t: r.t > 1e12 ? Math.floor(r.t / 1000) : Math.floor(r.t),
+    }))
     .sort((a, b) => a.t - b.t)
     .filter((r, i, all) => i === 0 || r.t !== all[i - 1].t);
 }
-
-function openStream(onMessage: (m: StreamMessage) => void, onState: (s: StreamState) => void): () => void {
-  let ws: WebSocket | null = null;
-  let attempt = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let closed = false;
-
-  const connect = () => {
-    if (closed) return;
-    onState(attempt === 0 ? "connecting" : "reconnecting");
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${scheme}://${location.host}${API_BASE}/stream`);
-    ws.onopen = () => {
-      attempt = 0;
-      onState("live");
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data)) as StreamMessage;
-        if (msg && typeof msg === "object" && "type" in msg) onMessage(msg);
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-    ws.onclose = () => {
-      ws = null;
-      if (closed) return;
-      onState("reconnecting");
-      timer = setTimeout(connect, backoffDelay(attempt++));
-    };
-    ws.onerror = () => ws?.close();
-  };
-
-  connect();
-  return () => {
-    closed = true;
-    clearTimeout(timer);
-    if (ws) {
-      ws.onclose = null;
-      ws.close();
-    }
-  };
-}
-
 export const httpBackend: Backend = {
   mock: false,
-  me: () => request<Me>("/me"),
-  markets: () => request<Market[]>("/markets"),
+  markets: (signal) => get<Market[]>("/markets", signal),
   candles: async (symbol, tf, limit, signal) =>
     normaliseCandles(
-      await request<Candle[]>(
-        `/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}&limit=${limit}`,
-        { signal },
+      await get<Candle[]>(
+        `/candles?symbol=${encodeURIComponent(symbol)}&tf=${tf}&limit=${Math.min(1000, limit)}`,
+        signal,
       ),
     ),
-  account: () => request<Account>("/account"),
-  positions: () => request<Position[]>("/positions"),
-  history: (limit) => request<ClosedTrade[]>(`/history?limit=${limit}`),
-  openOrder: (order) => post<IntentAck>("/orders/open", order),
-  closePositions: (positionIds) => post<IntentAck>("/orders/close", { positionIds }),
-  closeAll: () => post<IntentAck>("/orders/close-all"),
-  intent: (intentId) => request<Intent>(`/intents/${encodeURIComponent(intentId)}`),
-  stream: openStream,
+  summary: (address, signal) =>
+    emptyOnUnknown(
+      () => get<Summary>(`${accountPath(address)}/summary`, signal),
+      {
+        address,
+        equity: 0,
+        pnl: 0,
+        paperMinted: 0,
+        stakingRewards: 0,
+        asOf: Date.now(),
+      },
+    ),
+  portfolio: (address, range, signal) =>
+    emptyOnUnknown(
+      () =>
+        get<Portfolio>(
+          `${accountPath(address)}/portfolio?range=${range}`,
+          signal,
+        ),
+      { points: [] },
+    ),
+  positions: (address, signal) =>
+    emptyOnUnknown(
+      () => get<Position[]>(`${accountPath(address)}/positions`, signal),
+      [],
+    ),
+  trades: (address, cursor = "", limit = 75, signal) =>
+    emptyOnUnknown(
+      () =>
+        get<Page<Trade>>(
+          `${accountPath(address)}/trades?cursor=${encodeURIComponent(cursor)}&limit=${limit}`,
+          signal,
+        ),
+      { items: [], nextCursor: null },
+    ),
+  cashflows: (address, cursor = "", limit = 75, signal) =>
+    emptyOnUnknown(
+      () =>
+        get<Page<Cashflow>>(
+          `${accountPath(address)}/cashflows?cursor=${encodeURIComponent(cursor)}&limit=${limit}`,
+          signal,
+        ),
+      { items: [], nextCursor: null },
+    ),
 };
-
-/** Mock mode: VITE_MOCK=1 at build time, or ?mock=1 in the page URL. */
-export function mockRequested(): boolean {
-  if (import.meta.env.VITE_MOCK === "1") return true;
-  try {
-    return new URLSearchParams(location.search).get("mock") === "1";
-  } catch {
-    return false;
-  }
+/** Exhaust cursor pages for complete client-side stats, filtering and CSV exports. */
+export async function readAllPages<T>(
+  load: (cursor: string) => Promise<Page<T>>,
+  signal?: AbortSignal,
+): Promise<T[]> {
+  let cursor = "";
+  const seen = new Set<string>();
+  const rows: T[] = [];
+  do {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (seen.has(cursor))
+      throw new Error(
+        "The backend repeated a history cursor. Retry loading the account.",
+      );
+    seen.add(cursor);
+    const page = await load(cursor);
+    rows.push(...page.items);
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  } while (true);
+  return rows;
 }
-
+export function mockRequested(): boolean {
+  return (
+    import.meta.env.VITE_MOCK === "1" ||
+    new URLSearchParams(location.search).get("mock") === "1"
+  );
+}
 export async function getBackend(): Promise<Backend> {
   if (!mockRequested()) return httpBackend;
-  const { createMockBackend } = await import("./mock");
-  return createMockBackend();
+  return (await import("./mock")).createMockBackend();
 }

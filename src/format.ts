@@ -41,7 +41,10 @@ export function formatPrice(n: number | null | undefined): string {
  * USD amount, two decimals, grouped: $1,234,567.89. A non-zero amount under one cent keeps
  * four significant digits ($0.004210) so it never prints as $0.00.
  */
-export function formatUsd(n: number | null | undefined, opts: { sign?: boolean } = {}): string {
+export function formatUsd(
+  n: number | null | undefined,
+  opts: { sign?: boolean } = {},
+): string {
   if (!finite(n)) return MISSING;
   const abs = Math.abs(n);
   const decimals = abs > 0 && abs < 0.01 ? subUnitDecimals(abs, 4) : 2;
@@ -102,34 +105,11 @@ export function toMs(t: number | string | null | undefined): number | null {
   return t < 1e12 ? t * 1000 : t;
 }
 
-/** Time left until `expiresAt`: 11h 04m, 3d 02h, 45s, or "expired". */
-export function formatCountdown(expiresAt: number | string | null | undefined, now = Date.now()): string {
-  const ms = toMs(expiresAt);
-  if (ms === null) return MISSING;
-  const left = Math.floor((ms - now) / 1000);
-  if (left <= 0) return "expired";
-  const d = Math.floor(left / 86400);
-  const h = Math.floor((left % 86400) / 3600);
-  const m = Math.floor((left % 3600) / 60);
-  const pad = (x: number) => String(x).padStart(2, "0");
-  if (d > 0) return `${d}d ${pad(h)}h`;
-  if (h > 0) return `${h}h ${pad(m)}m`;
-  if (m > 0) return `${m}m ${pad(left % 60)}s`;
-  return `${left}s`;
-}
-
-/** 2026-11-01 14:05 in the viewer's local time. */
+/** 2026-11-01 14:05 in UTC. */
 export function formatDateTime(t: number | string | null | undefined): string {
   const ms = toMs(t);
   if (ms === null) return MISSING;
   const d = new Date(ms);
   const pad = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** Parse a user-typed decimal ("1,250.5", " 300 "). Returns NaN when it is not a number. */
-export function parseAmount(s: string): number {
-  const cleaned = s.replace(/[,\s$]/g, "");
-  if (!/^\d*\.?\d+$|^\d+\.$/.test(cleaned)) return NaN;
-  return Number(cleaned);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }

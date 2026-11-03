@@ -7,3 +7,28 @@ node_modules/
 *.log
 test/scratch/
 coverage/
+
+# Explicit submission path budget: artifacts/ <= 2,097,152 bytes total.
+# Only the named review records and screenshots below are included; all other
+# artifact paths stay ignored. Source + dist + these records must stay < 8 MiB.
+!artifacts/
+artifacts/*
+!artifacts/validation.md
+!artifacts/interactions.json
+!artifacts/accessibility.json
+!artifacts/taste-empty.json
+!artifacts/taste-account.json
+!artifacts/design-guidance-NOTICE.md
+!artifacts/design-guidance-LICENSE
+!artifacts/bundle-budget.json
+!artifacts/screenshots/
+artifacts/screenshots/*
+!artifacts/screenshots/390-empty.png
+!artifacts/screenshots/390-account.png
+!artifacts/screenshots/390-analysis.png
+!artifacts/screenshots/1440-account.png
+!artifacts/screenshots/1440-history.png
+!artifacts/screenshots/1440-analysis.png
+!artifacts/screenshots/liquidation-chart.png
+!artifacts/screenshots/390-focus.png
+!artifacts/screenshots/390-forced-colors.png

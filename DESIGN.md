@@ -2,132 +2,102 @@
 
 ## Overview
 
-PAPER DESK is a one-user trading terminal for someone who already trades Papertrade perps and wants a
-dense, keyboard-first desk. The look follows the brief: a Bloomberg terminal. That means a near-black page,
-orange as the only accent, warm grey text, green and red reserved for profit and loss, one monospace
-family, square corners, hairline rules and dense tables. Hierarchy comes from colour (orange titles, dim
-labels over bright values) and position, not from type size. Each screen is a fixed-height terminal on
-desktop. Panels scroll inside themselves and the page never does.
+PAPER DESK is a read-only Papertrade account viewer for people inspecting public perps activity. It retains the existing Bloomberg terminal direction: near-black surfaces, orange chrome, warm gray text, one bundled monospace family, square corners, dense tables and hairline rules. The public-address form is the primary interaction. Account metrics lead the loaded workspace; chart, positions and recent trades follow in that order.
 
-System-wide rules: every number uses tabular figures; money is a fixed-decimal string from `src/format.ts`;
-state is never shown by colour alone (sides read "Long"/"Short", PnL carries a sign, the stream state is
-a word).
+This revision uses a naturally scrolling page on desktop and mobile. Data tables scroll horizontally within named, focusable regions. There is no order ticket, trading dialog, connected-wallet state or signing flow. Changing data never implies authority to trade.
 
 ## Colors
 
-Defined as custom properties on `:root` in `src/styles.css`. Hex notation throughout.
+The canonical tokens are in `:root` in `src/styles.css`; components reuse them. Chart canvas colors are specified in `src/components/Chart.tsx`, `src/components/Analysis.tsx`, `src/chartOverlays.ts` and the unchanged `src/indicators.ts`.
 
-| Token | Value | Role |
+| Token | Value | Use |
 | --- | --- | --- |
-| `--color-bg` | `#050607` | Page, chart background, inputs, table cells |
-| `--color-surface` | `#0b0c0d` | Ticket, tab bar, panel heads, table header, status bar, dialog |
-| `--color-surface-raised` | `#13140f` | Hover rows and buttons, toasts, the no-backend banner |
-| `--color-line` | `#2a2620` | Hairline rules, segmented-control gaps, chart scale borders |
-| `--color-line-strong` | `#4a4237` | Input and button borders, disabled segment text |
-| `--color-text` | `#c7bca6` | Body text and values |
-| `--color-text-dim` | `#8f8676` | Labels, table headers, hints, inactive tabs |
-| `--color-accent` | `#ff8c00` | Brand, selected tab and segment, panel titles, focus ring, row Close |
-| `--color-accent-ink` | `#050607` | Text on accent, profit, loss and bust fills |
-| `--color-profit` | `#22c55e` | Positive PnL, Long, confirmed toasts, LIVE |
-| `--color-loss` | `#ef4444` | Negative PnL, Short, errors, Close all, failed toasts |
-| `--color-bust` | `#ff2d78` | Bust prices, bust chart line, MOCK DATA badge |
-| `--color-mid` | `#6366f1` | BB midline (the chart sets it directly) |
+| `--color-bg` | `#050607` | Page, inputs, chart backgrounds, primary-action ink |
+| `--color-surface` | `#0b0c0d` | Tab bar, table headers, panel headings, footer |
+| `--color-surface-raised` | `#13140f` | Hover and selected segments, data/error notices |
+| `--color-line` | `#2a2620` | Panel/table rules and chart scale borders |
+| `--color-line-strong` | `#4a4237` | Field, button and badge outlines |
+| `--color-text` | `#c7bca6` | Body text and numeric values |
+| `--color-text-dim` | `#8f8676` | Labels, hints, inactive controls and secondary metadata |
+| `--color-accent` | `#ff8c00` | Brand, primary Load button, selected tab, panel headings, focus |
+| `--color-accent-ink` | `#050607` | Text on orange fills |
+| `--color-profit` | `#22c55e` | Positive PnL, long entries, LIVE |
+| `--color-loss` | `#ef4444` | Negative PnL, short entries and errors |
+| `--color-bust` | `#ff2d78` | Liquidation/bust levels, LIQ text and explicit mock badge |
+| `--color-mid` | `#6366f1` | Existing BB midline reference color |
 
-Chart-only colours live in code next to their use: the candle ladder in `CANDLE_COLORS`
-(`src/indicators.ts`: `#7f1d1d #dc2626 #f97316 #f59e0b #84cc16 #4ade80 #16a34a #14532d`, neutral
-`#6b6457` before the first full window), and the band and position-line colours in `BAND_STYLE` and
-`LINE_COLORS` (`src/components/Chart.tsx`). The legend in `styles.css` (`.lg-*`) repeats the band hues.
+Chart rules are preserved: BB mid `#6366f1`; upper bands `#fca5a5`, `#f87171`, `#dc2626`; lower bands `#86efac`, `#4ade80`, `#16a34a`. Entry levels are `#8a8578`, bust levels `#FF2D78`, and exit squares `#c7bca6`. The eight candle colors remain in `CANDLE_COLORS` in `src/indicators.ts`, including dark outer-bucket colors. Those candle colors are visual encodings, not text colors. The midline's text legend uses the lighter `#a5a6ff` for readable text.
 
-Contrast was measured by the taste@1 probe (all text pairs pass 4.5:1, or 3:1 when large, at 320/390/1440
-in mock mode). Individual ratios were not recorded.
+Equity uses an orange area series with an 18%-to-zero alpha fill over the chart background. PnL uses a green line. Histogram meters use orange. This area fill indicates chart magnitude; it is not a general surface treatment.
+
+Rendered measurements in Chromium against `#050607`: orange brand 8.69:1, dim text 5.64:1, profit 8.90:1, loss 5.39:1, bust 5.70:1. The observed Load-button hover pair, `#050607` on `#ffa333`, measured 10.18:1. See `artifacts/accessibility.json` for the exact sampled pairs. Canvas content, every hover background and physical-device rendering are not exhaustively contrast-audited.
 
 ## Typography
 
-- Family: `--font-mono`: "IBM Plex Mono", then `ui-monospace`, SFMono-Regular, Menlo, Consolas, monospace.
-  Bundled from `@fontsource/ibm-plex-mono`, latin subset, weights 400 and 600, imported in `src/main.tsx`.
-  The chart canvas uses the same family and redraws once `document.fonts.ready` resolves.
-- Weights: `--fw-regular` 400 and `--fw-bold` 600. No other weights or italics.
-- Scale (5 sizes):
+- `--font-mono`: **IBM Plex Mono**, then `ui-monospace`, `SFMono-Regular`, Menlo, Consolas, monospace. `src/main.tsx` imports the local Latin 400 and 600 font CSS from the existing dependency; WOFF/WOFF2 assets ship in `dist/assets`.
+- Weights: `--fw-regular: 400`, `--fw-bold: 600`. Headings, strong text and the primary button use 600, matching the bundled face. No synthesized third weight is needed.
+- Sizes: `--fs-xs: 11px` (labels, hints, table headings, status); `--fs-sm: 12px` (body, tables, controls); `--fs-md: 13px` (panel headings and mobile values/brand); `--fs-lg: 16px` (metric values, desktop brand and mobile text inputs); `--fs-xl: 20px` (empty-state heading/prompt).
+- Body line-height is 1.5; h1 and the empty-state heading use 1.2. Natural letter-spacing throughout. Introductory copy has a 65ch maximum measure and balances its heading.
+- `.num` and `.grid` use tabular figures. USD/price/percent formatting is centralized in `src/format.ts`; dates always use UTC getters. Critical addresses are also rendered as full, selectable text with `overflow-wrap: anywhere`.
+- Uppercase is retained for terminal chrome: the brand, F-key tab names, status and MOCK DATA badge. Labels and explanatory content use sentence case.
 
-| Token | Size | Used for |
-| --- | --- | --- |
-| `--fs-xs` | 11px | Labels, table headers, hints, errors, kbd, status bar, stream state |
-| `--fs-sm` | 12px | Body default, table cells, tabs, segments, buttons, readout |
-| `--fs-md` | 13px | Header values, inputs, preview values, primary buttons, brand |
-| `--fs-lg` | 16px | Leverage value; inputs on coarse pointers (prevents iOS zoom) |
-| `--fs-xl` | 20px | Dialog titles |
-
-- Line-height 1.45 on body; 1.2 on dialog titles. Natural letter-spacing everywhere.
-- Capitals are written in the source, not with `text-transform`, and only for terminal chrome: the brand,
-  header metric labels, tab labels, stream state and the MOCK DATA badge. Content (panel titles, table
-  headers, labels, buttons) uses sentence case.
-- `.num` sets `font-variant-numeric: tabular-nums` on every changing value.
+The monochrome prose treatment deliberately follows the requested Bloomberg look and existing system. The taste probe's generic “no monospace prose” preference remains an explicit visual-direction exception, not a claim that the probe passed it.
 
 ## Layout
 
-- Spacing: `--space-1` 4px, `--space-2` 8px, `--space-3` 12px, `--space-4` 16px. Controls: `--control-h`
-  30px. Ticket column: `--ticket-w` 320px.
-- Shell (`.app`): a flex column at `100dvh` (min 600px): header strip, tab bar, optional banner, `.main`
-  (`flex: 1 1 0`), status bar. Toasts are fixed bottom-right above the status bar.
-- TRADE (`.trade`): grid `minmax(0, 1fr) var(--ticket-w)`. The left column (`.trade-main`) stacks the
-  chart (`minmax(300px, 1fr)`) over the positions table (`minmax(150px, 34%)`). The chart panel is its own
-  grid with a `minmax(0, 1fr)` column so the readout never widens it.
-- F2/F3 (`.book`): a vertical stack of table panels that scrolls.
-- Tables scroll horizontally inside `.table-scroll` (focusable region) with sticky headers; the page never
-  scrolls sideways.
+The base spacing tokens are 4, 8, 12 and 16px (`--space-1` through `--space-4`). Larger section gaps and empty-state spacing follow that 4px grid. Controls have a 34px base minimum height. The app uses a flex column with `min-height: 100dvh`; the footer follows content instead of covering it. The loaded workspace uses the available viewport width; the empty introduction caps at 1100px.
 
-Breakpoints (`src/styles.css`):
+- **Above 1150px:** brand/utilities share the first header line. Address label, field/actions and recent-address controls share the next line. Seven account metrics form one strip. The market controls, readout and chart fill the workspace width.
+- **At 1150px and below:** address tools move below the main field row. Metrics become four columns. Market utilities wrap, and the optional navigation note hides.
+- **At 760px and below:** the header wraps to product identity/status, descriptor, labeled full-width 44px address input, Load/Clear actions, and recent/nickname controls. Tabs share the width with 44px targets. Metrics use three columns; chart toolbar/readout wrap into reserved space. Main text inputs use 16px; analysis filter selects also use 16px. History filters wrap from two columns to one as needed. Analysis grouping tables stack; statistics use two columns.
+- **At 380px and below:** metrics use two columns, the market-volume line takes a full row, and histogram columns tighten.
 
-- **1100px and up**: fixed-height terminal as above. Verified at 1280x800, 1440x900 and 1920x1080.
-- **Up to 1099px**: the shell becomes a scrolling page. Chart (300px tall), then ticket, then positions
-  (table capped at 320px).
-- **Up to 760px**: header wraps to brand + stream state, then metrics in a 3-column grid; tabs share the
-  width and F2 shortens to "POSITIONS"; the ticket moves **above** the chart (and hides its own title) so
-  the whole order flow, Review button included, is on the first phone screen; chart 240px; the readout
-  wraps onto two reserved lines; the shortcut legend hides.
-- **`pointer: coarse`**: inputs 40px tall at 16px, segments 34px.
+The address dropdown can shrink beside the nickname control, fixing the observed 2px overflow at 320px. Full hashes stay complete in the table scroller rather than being ellipsized. Each table has a nearby horizontal-scroll cue naming its details. The sigma histogram uses a four-column CSS grid: bucket, native meter, count and settled win rate.
+
+Price-chart height is `clamp(310px, 48vh, 600px)` on desktop and 310px on mobile. Portfolio-chart height is 300px on desktop and 260px on mobile. A ResizeObserver updates each canvas. The price-chart loading/error layer holds its existing chart space.
+
+Chromium reflow checks covered 320, 390, 760, 1024 and 1440 CSS-pixel widths across all three loaded screens, plus the initial 390px empty state. These are viewport checks, not native 200% browser zoom or a physical phone test.
 
 ## Elevation & Depth
 
-Flat. No shadows. Depth comes from three tonal layers (`bg` → `surface` → `surface-raised`) and 1px rules.
-The header is closed by a 1px accent rule. Dialogs use a 1px accent border over a `rgba(0,0,0,0.72)`
-backdrop. Toasts add a 3px left rule in the status colour. The chart loading/error overlay covers the chart
-host with `--color-bg`, so the layout does not move.
+The interface is flat. Tonal surfaces and 1px separators carry structure; there are no ambient drop shadows. A selected segment uses an inset 2px orange underline as its state indicator. The selected tab uses an orange fill. The address nickname editor is a native `<details>` disclosure with a bordered, solid-surface editing area; it is a nonmodal disclosure, not a focus-trapping dialog.
+
+Chart overlays use the existing canvas layer. Loading/error copy occupies an absolutely positioned chart layer. The focused-trade message sits in normal flow with orange rules and a Reset view button. No sticky toolbar covers account data.
 
 ## Shapes
 
-`--radius: 0` is applied to every element via the universal selector. Square corners only. Segmented
-controls are cells separated by 1px gaps showing `--color-line`. Preview and confirm lists use the same
-1px-gap grid. The stream dot is an 8px square.
+`--radius: 0` is applied globally. Buttons, fields, table cells, meters and badges remain square. The status dot is a 6px square. Chart markers have deliberately different shapes: entry arrows, exit squares and literal ✕ LIQ text for liquidations. Indicator arrows and their labels retain the existing decluttering behavior.
 
 ## Components
 
-| Component | Source | Notes |
+| Component/pattern | Source | Behavior and states |
 | --- | --- | --- |
-| Header strip | `src/components/Header.tsx`, `.topbar .metrics .metric .conn` | `<dl>` of six metrics; values `min-width: 11ch` so updates do not shift neighbours; `.conn-live/connecting/reconnecting` |
-| F-key tabs | `src/App.tsx` (`TABS`), `.tab` | WAI-ARIA tabs: roving tabindex, arrows/Home/End, F1–F3 global; selected = accent fill |
-| Segmented control | `.seg`, `.seg-fill`, `.presets`, `.seg-btn[aria-pressed]` | Timeframes, market, side (`.side`, Long fills profit, Short fills loss), leverage presets; disabled presets above the market max |
-| Field | `.field`, `.label`, `.input`, `.hint`, `.error` | Labels bound with `htmlFor`; `aria-invalid` turns the border red; error text sits under its field, empty errors collapse |
-| Buttons | `.btn` + `.btn-primary`, `.btn-long`, `.btn-short`, `.btn-ghost`, `.btn-danger`, `.btn-danger-solid`, `.btn-row`, `.btn-block` | Verb labels ("Review long BTC", "Close 3 positions"); hover gated by `@media (hover: hover)` |
-| Dense table | `src/components/Tables.tsx`, `.table-panel .panel-head .table-scroll .grid` | Row header = market in accent; `.r` right-aligns numbers; `.empty` rows for loading and empty states; totals in `tfoot` |
-| Dialog | `src/components/Dialog.tsx`, `.dialog` | Native `<dialog>` with `showModal()`: focus trap, Esc cancels, focus returns to the opener. Used for order confirm and Close all |
-| Toasts | `src/components/Toasts.tsx`, `.toast-ok/pending/bad` | One polite live region; status word + action label + intent id; confirmed toasts close after 7 s, others after 14 s; dismiss button |
-| Chart | `src/components/Chart.tsx`, `.chart-panel .chart-toolbar .readout .chart-host .chart-overlay .chart-legend` | Loading, error (with Retry) and ready states in the same box |
-| Banner | `.banner` in `App.tsx` | Shown only when the initial load fails; links to `?mock=1` |
+| Address header | `src/components/Header.tsx`, `.addressbar`, `.address-tools` | Visible label, paste/typing, Enter load, Esc clear, inline validation and focus, recent-ten native dropdown, optional nickname disclosure, storage-unavailable notice |
+| Address helpers | `src/address.ts` | Exact-length validation, lowercase normalization, safe history parsing/deduplication, URL updates |
+| Feed status | `src/useAccount.ts`, `.conn-*` | Text plus square status cue; IDLE/LOADING/LIVE/STALE/ERROR; visibility-aware polling, stale snapshot detection and retry |
+| Workspace tabs | `src/App.tsx`, `.tab` | F1/F2/F3, WAI-ARIA selected state, roving tabindex, arrows/Home/End; only the active loaded content mounts |
+| Summary strip | `src/App.tsx`, `.metrics` | Seven values with explicit labels; unavailable data reads `--`; separate PAPER staking-reward line |
+| Market chart | `src/components/Chart.tsx` | Existing BB ladder/candle/signal behavior, six timeframes, mark updates, crosshair readout, loading/error/retry, focused-trade zoom/reset |
+| Account markers | `src/chartOverlays.ts` | Timestamp-aligned entries and exits, deduplicated settlements, pink X/LIQ; off-range event coverage is disclosed; toggle also removes position lines/anchors |
+| Segmented controls | `.seg`, `.seg-btn` | Native buttons with `aria-pressed`; market, timeframe, curve metric and range selections |
+| Data tables | `src/components/Tables.tsx` | Semantic headers, focusable horizontal scroll, loading/empty states; trade row pointer action has an equivalent native market button |
+| History filters/pages/CSV | `src/components/Tables.tsx`, `src/csv.ts` | Named native selects, explicit reset, 75-row independent pagination, disabled page boundaries; CSV exports all matching rows |
+| Analysis | `src/components/Analysis.tsx`, `src/stats.ts` | Area/line curve, range and metric controls, nine statistics, two group tables, eight sigma buckets and coverage disclosure; local errors/retry |
+| Empty/error notices | `src/App.tsx`, `.empty-workspace`, `.banner`, `.no-activity` | Empty selection explains what to paste; an unknown account has no-activity copy; service failures retain last successful data and provide recovery |
 
-Focus: a global `:focus-visible` 2px accent outline (inset on inputs).
+Every interactive element has a visible 2px orange focus outline with 2px offset. There is a first-focusable skip link. Native controls handle ordinary keyboard behavior; readout changes do not announce every price tick. Address errors use an alert region; account status and filter/page results use polite status semantics. State also has text/signs/shapes, not color alone.
+
+Hover styling is gated by `hover: hover`; enabled controls brighten when pressed. Only background/color transitions run (100ms ease-out), opt-in under `prefers-reduced-motion: no-preference`. Forced-colors mode uses the system Highlight focus color. No entrance or endless animation exists.
 
 ## Do's and Don'ts
 
-- Do take colours, sizes and spacing from the `:root` tokens. A new value needs a new role token, not a raw hex.
-- Do format every amount with `formatUsd`/`formatPrice`/`formatPct` from `src/format.ts`. Never use `toLocaleString` compact output or an unformatted float.
-- Do put new panels in `.table-panel` + `.panel-head` + `.table-scroll`, and new tabs in `TABS` with the next F-key.
-- Do keep green and red for profit/loss, long/short and success/failure only. Orange is selection and brand.
-- Don't add a second font, a third weight, rounded corners, shadows or gradients.
-- Don't write `style=` attributes in JSX or add inline scripts: the CSP blocks them.
-- Don't let a value change the width of its container: give it tabular figures and a minimum width.
-- Don't send an irreversible bulk action without a `Dialog` that states the consequence.
+- Reuse `.table-panel`, `.panel-head`, `.table-scroll`, `.grid` and the existing field/button tokens for new read-only views.
+- Keep the public address and primary Load action near the top. Keep full identifiers available and use local assets.
+- Preserve indicator math, candle colors and signal semantics in `src/indicators.ts`; overlay work belongs in the separate overlay helper/component.
+- Route data reads through the GET-only `Backend` interface. Keep synthetic data visibly identified; show unavailable data honestly.
+- Put explanatory limits beside the statistic they affect, especially incomplete candle coverage and intrabar context.
+- Do not add wallet infrastructure, mutation methods, external runtime requests, inline scripts, inline JSX styles, rounded-card styling or a new font family.
 
-Recipe for another tab: add `{ id, key: "F4", label }` to `TABS` in `src/App.tsx`, add a `role="tabpanel"`
-div with class `book`, and fill it with `.table-panel` sections using the `.grid` table and the format
-helpers. Mock data for it goes in `src/mock.ts` behind the same `Backend` method.
+To add another read-only panel, place a semantic section inside the relevant existing tab, reuse the table/chart primitives and formatting helpers, add its typed GET method and mock implementation if needed, and check its loading/empty/error states at 320 and 390px. Required CSP and static relative assets remain system invariants.
+
+Design-guidance attribution and the supplied licenses are retained in `artifacts/design-guidance-NOTICE.md` and `artifacts/design-guidance-LICENSE`.

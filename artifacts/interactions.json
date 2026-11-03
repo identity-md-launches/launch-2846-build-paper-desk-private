@@ -1,0 +1,131 @@
+{
+  "checks": [
+    {
+      "name": "Cold empty state makes no API calls",
+      "passed": true
+    },
+    {
+      "name": "Primary address action and product visible at 390",
+      "passed": true
+    },
+    {
+      "name": "Address errors are inline, announced and focused",
+      "passed": true
+    },
+    {
+      "name": "Escape clears draft and validation error",
+      "passed": true
+    },
+    {
+      "name": "Enter normalizes mixed-case address and URL while preserving mock mode",
+      "passed": true
+    },
+    {
+      "name": "Summary, positions, recent trades and BB chart load",
+      "passed": true
+    },
+    {
+      "name": "No mobile page overflow with a loaded account",
+      "passed": true
+    },
+    {
+      "name": "Optional nickname persists and appears in recent dropdown",
+      "passed": true
+    },
+    {
+      "name": "Market and all six timeframe controls are operable",
+      "passed": true
+    },
+    {
+      "name": "Account overlays toggle independently of indicator legend",
+      "passed": true
+    },
+    {
+      "name": "Trade selection scrolls, focuses and zooms chart",
+      "passed": true
+    },
+    {
+      "name": "F2 opens complete paginated trades and cashflows",
+      "passed": true
+    },
+    {
+      "name": "Market, side and outcome filters compose and reset pagination",
+      "passed": true
+    },
+    {
+      "name": "Trades CSV exports every matching event with UTC headers",
+      "passed": true
+    },
+    {
+      "name": "Cashflows filters and CSV work independently",
+      "passed": true
+    },
+    {
+      "name": "Filtering to an absent combination has a recoverable empty state",
+      "passed": true
+    },
+    {
+      "name": "F3 loads equity and PnL curves, ranges, stats and sigma histogram",
+      "passed": true
+    },
+    {
+      "name": "Tabs support roving arrows, Home and End",
+      "passed": true
+    },
+    {
+      "name": "All screens reflow at 320, 390, 760, 1024 and 1440 CSS px",
+      "passed": true
+    },
+    {
+      "name": "Escape clears loaded account and URL and supports browser Back",
+      "passed": true
+    },
+    {
+      "name": "Last ten addresses are unique and ordered, including nicknames",
+      "passed": true
+    },
+    {
+      "name": "Mock requests are same-origin GETs; fonts load and CSP causes no errors",
+      "passed": true
+    },
+    {
+      "name": "Invalid address URLs remain editable and Clear removes the parameter",
+      "passed": true
+    },
+    {
+      "name": "Address viewing works when localStorage is unavailable",
+      "passed": true
+    },
+    {
+      "name": "HTTP integration loads both trade cursor pages using GET",
+      "passed": true
+    },
+    {
+      "name": "Visible polling runs fast endpoints at 5s and activity at 30s",
+      "passed": true
+    },
+    {
+      "name": "Hidden tabs stop requests and show STALE; visibility resumes both polls",
+      "passed": true
+    },
+    {
+      "name": "Stale backend asOf is labelled STALE",
+      "passed": true
+    },
+    {
+      "name": "Request failure displays ERROR and a working retry",
+      "passed": true
+    },
+    {
+      "name": "Unknown 404 account is a clear no-activity state, not an error",
+      "passed": true
+    },
+    {
+      "name": "Known empty account has the same no-activity state",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "WebKit unavailable: browserType.launch: \n╔══════════════════════════════════════════════════════╗\n║ Host system is missing dependencies to run browsers. ║\n║ Missing libraries:                                   ║\n║     libgtk-4.so.1                             "
+  ]
+}

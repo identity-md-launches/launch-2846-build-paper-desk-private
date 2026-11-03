@@ -1,307 +1,304 @@
-// Mock mode: an in-browser stand-in for the /api backend so the UI runs without a server.
-// Everything here is synthetic and the header labels the session MOCK DATA.
-
-import {
-  TIMEFRAME_SECONDS,
-  type Account,
-  type Backend,
-  type Candle,
-  type ClosedTrade,
-  type Intent,
-  type IntentAck,
-  type Market,
-  type Me,
-  type OpenOrder,
-  type Position,
-  type StreamMessage,
-  type StreamState,
-  type Timeframe,
+import type {
+  Backend,
+  Candle,
+  Cashflow,
+  Market,
+  Page,
+  PortfolioPoint,
+  Position,
+  Summary,
+  Timeframe,
+  Trade,
 } from "./api";
-import { bustPrice, triggerPrice } from "./indicators";
+import { TIMEFRAME_SECONDS } from "./api";
 
-/** Mulberry32: small deterministic PRNG so candles are stable across reloads. */
-function prng(seed: number) {
-  let a = seed >>> 0;
+const hash = (s: string) =>
+  [...s].reduce(
+    (n, c) => (Math.imul(n, 31) + c.charCodeAt(0)) >>> 0,
+    2166136261,
+  );
+function random(seed: number) {
+  let s = seed || 1;
   return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
   };
 }
-
-function gaussian(rand: () => number): number {
-  const u = Math.max(rand(), 1e-12);
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
-}
-
-const SEED_MARKETS: Market[] = [
-  { instrumentId: 0, symbol: "BTC", mark: 97240.5, change24hPct: 1.84, longOi: 4_812_330.12, shortOi: 3_905_118.4, maxLeverage: 1000 },
-  { instrumentId: 1, symbol: "ETH", mark: 3412.07, change24hPct: -0.62, longOi: 2_140_905.55, shortOi: 2_388_210.9, maxLeverage: 1000 },
-];
-
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const round2 = (n: number) => Math.round(n * 100) / 100;
-
-export function createMockBackend(): Backend {
-  const rand = prng(20261101);
-  const marks = new Map(SEED_MARKETS.map((m) => [m.symbol, m.mark]));
-  const startBalance = 10_000;
-  let realised = 412.38;
-  let queued = 0;
-  let seq = 3;
-  const now = Date.now();
-  const listeners = new Set<(m: StreamMessage) => void>();
-  const intents = new Map<string, Intent>();
-  const candleCache = new Map<string, Candle[]>();
-
-  const mkPosition = (
-    id: string,
-    symbol: string,
-    isLong: boolean,
-    marginUsd: number,
-    leverage: number,
-    entry: number,
-    openedAt: number,
-    tpPct?: number,
-    slPct?: number,
-  ): Position => ({
-    positionId: id,
-    symbol,
-    isLong,
-    marginUsd,
-    leverage,
-    sizeUsd: marginUsd * leverage,
-    entry,
-    mark: entry,
-    pnlUsd: 0,
-    pnlPct: 0,
-    bustPrice: bustPrice(entry, leverage, isLong),
-    openedAt,
-    takeProfit: tpPct ? triggerPrice(entry, tpPct, isLong, "tp") : null,
-    stopLoss: slPct ? triggerPrice(entry, slPct, isLong, "sl") : null,
-  });
-
-  let positions: Position[] = [
-    mkPosition("p-1", "BTC", true, 250, 50, 96610.25, now - 3.2 * 3600_000, 1.5, 0.8),
-    mkPosition("p-2", "ETH", false, 120, 25, 3448.9, now - 50 * 60_000, undefined, 2),
-    mkPosition("p-3", "BTC", false, 60, 200, 97480.0, now - 12 * 60_000),
-  ];
-
-  const history: ClosedTrade[] = Array.from({ length: 14 }, (_, i) => {
-    const symbol = i % 3 === 1 ? "ETH" : "BTC";
-    const isLong = i % 2 === 0;
-    const leverage = [10, 25, 50, 100, 250, 500][i % 6];
-    const margin = [50, 80, 120, 200, 40, 25][i % 6];
-    const base = symbol === "BTC" ? 96000 + i * 115 : 3380 + i * 6.5;
-    const move = (((i * 37) % 11) - 4.5) / 1000;
-    const exit = base * (1 + move);
-    const sizeUsd = margin * leverage;
-    const fees = round2(sizeUsd * 0.0004);
-    const pnl = round2(sizeUsd * (isLong ? move : -move) - fees);
-    const closedAt = now - (i + 1) * 5.5 * 3600_000;
-    return {
-      positionId: `h-${i + 1}`,
-      symbol,
-      isLong,
-      sizeUsd,
-      leverage,
-      entry: base,
-      exit,
-      pnlUsd: Math.max(pnl, -margin),
-      fees,
-      openedAt: closedAt - (20 + i * 9) * 60_000,
-      closedAt,
-    };
-  });
-
-  const revalue = () => {
-    positions = positions.map((p) => {
-      const mark = marks.get(p.symbol) ?? p.mark;
-      const move = (mark - p.entry) / p.entry;
-      const pnlUsd = Math.max(p.sizeUsd * (p.isLong ? move : -move), -p.marginUsd);
-      return { ...p, mark, pnlUsd: round2(pnlUsd), pnlPct: (pnlUsd / p.marginUsd) * 100 };
-    });
-  };
-
-  const account = (): Account => {
-    const marginInUse = positions.reduce((s, p) => s + p.marginUsd, 0);
-    const openPnl = positions.reduce((s, p) => s + p.pnlUsd, 0);
-    const equity = startBalance + realised + openPnl;
-    return {
-      equity: round2(equity),
-      available: round2(Math.max(0, startBalance + realised - marginInUse - queued)),
-      marginInUse: round2(marginInUse),
-      openPnl: round2(openPnl),
-      queuedBalance: round2(queued),
-    };
-  };
-
-  const emit = (m: StreamMessage) => listeners.forEach((l) => l(m));
-
-  const closeIds = (ids: string[]) => {
-    for (const p of positions.filter((x) => ids.includes(x.positionId))) {
-      const fees = round2(p.sizeUsd * 0.0004);
-      realised += p.pnlUsd - fees;
-      history.unshift({
-        positionId: p.positionId,
-        symbol: p.symbol,
-        isLong: p.isLong,
-        sizeUsd: p.sizeUsd,
-        leverage: p.leverage,
-        entry: p.entry,
-        exit: p.mark,
-        pnlUsd: round2(p.pnlUsd - fees),
-        fees,
-        openedAt: p.openedAt,
-        closedAt: Date.now(),
-      });
+const round = (n: number) => Math.round(n * 100) / 100;
+const delay = (signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
     }
-    positions = positions.filter((x) => !ids.includes(x.positionId));
-  };
+    const aborted = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", aborted);
+      resolve();
+    }, 140);
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
 
-  /** Queue an intent, settle it after a short delay, and push every change on the stream. */
-  const runIntent = (work: () => string | null, reserve = 0): IntentAck => {
-    const intentId = `int-${Date.now().toString(36)}-${(seq++).toString(36)}`;
-    intents.set(intentId, { status: "queued" });
-    queued += reserve;
-    emit({ type: "intent", data: { intentId, status: "queued" } });
-    emit({ type: "account", data: account() });
-    setTimeout(() => {
-      queued = Math.max(0, queued - reserve);
-      const error = work();
-      const result: Intent = error ? { status: "failed", error } : { status: "confirmed" };
-      intents.set(intentId, result);
-      revalue();
-      emit({ type: "intent", data: { intentId, ...result } });
-      emit({ type: "positions", data: positions });
-      emit({ type: "account", data: account() });
-    }, 1400);
-    return { intentId, status: "queued" };
-  };
-
-  const genCandles = (symbol: string, tf: Timeframe, limit: number): Candle[] => {
+/** Synthetic fixtures only; generated separately for every pasted public address. No network. */
+export function createMockBackend(): Backend {
+  const epoch = Math.floor(Date.now() / 900_000) * 900_000;
+  const baseMarks: Record<string, number> = { BTC: 97425.5, ETH: 3412.8 };
+  const candleCache = new Map<string, Candle[]>();
+  const accounts = new Map<
+    string,
+    {
+      trades: Trade[];
+      positions: Position[];
+      cashflows: Cashflow[];
+      summary: Summary;
+    }
+  >();
+  const mark = (symbol: string) =>
+    round(
+      baseMarks[symbol] *
+        (1 + Math.sin(Math.floor(Date.now() / 5000) / 20) * 0.0002),
+    );
+  const bars = (symbol: string, tf: Timeframe): Candle[] => {
     const key = `${symbol}:${tf}`;
     const step = TIMEFRAME_SECONDS[tf];
+    const last = Math.floor(Date.now() / 1000 / step) * step;
     const cached = candleCache.get(key);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const lastOpen = Math.floor(nowSec / step) * step;
-    if (cached && cached[cached.length - 1].t === lastOpen) return cached.slice(-limit);
-    const r = prng(symbol.charCodeAt(0) * 7919 + step);
-    const vol = 0.00045 * Math.sqrt(step / 60);
-    const end = marks.get(symbol) ?? 100;
-    // Walk backwards from the current mark so the last close meets the live price.
-    const closes: number[] = [end];
-    let drift = 0;
-    for (let i = 1; i < limit; i++) {
-      drift = drift * 0.9 + gaussian(r) * vol * 0.08;
-      const shock = r() < 0.015 ? gaussian(r) * vol * 3 : 0;
-      closes.unshift(closes[0] * (1 - drift - gaussian(r) * vol - shock));
-    }
-    const out: Candle[] = closes.map((c, i) => {
-      const o = i === 0 ? c * (1 + gaussian(r) * vol * 0.3) : closes[i - 1];
-      const span = Math.abs(gaussian(r)) * vol * c * 0.6;
+    if (cached?.at(-1)?.t === last) return cached;
+    const r = random(hash(key));
+    const vol = 0.00065 * Math.sqrt(step / 60);
+    const closes = [baseMarks[symbol]];
+    for (let i = 1; i < 1000; i++)
+      closes.unshift(closes[0] * (1 + (r() - 0.5) * vol * 2));
+    const result = closes.map((c, i): Candle => {
+      const o = closes[Math.max(0, i - 1)];
+      const span = c * vol * (0.15 + r() * 0.5);
       return {
-        t: lastOpen - (limit - 1 - i) * step,
+        t: last - (999 - i) * step,
         o,
-        h: Math.max(o, c) + span * r(),
+        h: Math.max(o, c) + span,
         l: Math.min(o, c) - span * r(),
         c,
-        v: Math.round((50 + r() * 400) * (step / 60) ** 0.5 * 100) / 100,
+        v: round(20 + r() * 180),
       };
     });
-    candleCache.set(key, out);
-    return out;
+    candleCache.set(key, result);
+    return result;
   };
-
+  const account = (address: string) => {
+    const cached = accounts.get(address);
+    if (cached) return cached;
+    const r = random(hash(address));
+    const trades: Trade[] = [];
+    for (let i = 0; i < 158; i++) {
+      const symbol = r() > 0.42 ? "BTC" : "ETH",
+        isLong = r() > 0.45;
+      const openedAt = epoch - (i * 81 + 30 + Math.floor(r() * 30)) * 60_000;
+      const hold = (6 + Math.floor(r() * 160)) * 60_000;
+      const closedAt = Math.min(epoch - 60_000, openedAt + hold);
+      const candle =
+        bars(symbol, "15m").find(
+          (b) => b.t === Math.floor(openedAt / 900_000) * 900,
+        )?.c ?? baseMarks[symbol];
+      const entry = round(candle * (1 + (r() - 0.5) * 0.003));
+      const marginUsd = round(100 + r() * 900),
+        leverage = [10, 20, 25, 50, 75, 100][Math.floor(r() * 6)];
+      const roll = r(),
+        kind =
+          roll < 0.08
+            ? "Liquidated"
+            : roll < 0.25
+              ? "TakeProfit"
+              : roll < 0.4
+                ? "StopLoss"
+                : "Closed";
+      const feeUsd = round(marginUsd * leverage * 0.0001);
+      const gross =
+        kind === "Liquidated"
+          ? -marginUsd
+          : kind === "StopLoss"
+            ? -marginUsd * (0.08 + r() * 0.36)
+            : marginUsd * (r() < 0.69 ? 0.04 + r() * 0.68 : -r() * 0.35);
+      const exit = round(
+        entry * (1 + ((isLong ? 1 : -1) * gross) / (marginUsd * leverage)),
+      );
+      trades.push({
+        positionId: `mock-position-${i}`,
+        symbol,
+        isLong,
+        kind,
+        marginUsd,
+        leverage,
+        entry,
+        exit,
+        pnlUsd: round(gross - feeUsd),
+        feeUsd,
+        paperMinted: round(Math.max(0, gross) * 0.08),
+        openedAt,
+        closedAt,
+        txHash: null,
+      });
+    }
+    const positions: Position[] = ["BTC", "ETH", "BTC"].map((symbol, i) => {
+      const isLong = i !== 2,
+        leverage = [100, 50, 75][i],
+        marginUsd = [850, 420, 1200][i];
+      const entry = round(
+        baseMarks[symbol] *
+          (1 + (i === 0 ? -0.0018 : i === 1 ? 0.0012 : 0.0025)),
+      );
+      const openedAt = epoch - (i + 1) * 55 * 60_000;
+      trades.push({
+        positionId: `mock-open-${i}`,
+        symbol,
+        isLong,
+        kind: "Opened",
+        marginUsd,
+        leverage,
+        entry,
+        exit: null,
+        pnlUsd: 0,
+        feeUsd: round(marginUsd * leverage * 0.00005),
+        paperMinted: 0,
+        openedAt,
+        closedAt: null,
+        txHash: null,
+      });
+      return {
+        positionId: `mock-open-${i}`,
+        symbol,
+        isLong,
+        marginUsd,
+        leverage,
+        sizeUsd: marginUsd * leverage,
+        entry,
+        mark: mark(symbol),
+        pnlUsd: 0,
+        pnlPct: 0,
+        bustPrice: round(entry * (1 + (isLong ? -1 : 1) / leverage)),
+        openedAt,
+      };
+    });
+    trades.sort(
+      (a, b) =>
+        Number(b.closedAt ?? b.openedAt) - Number(a.closedAt ?? a.openedAt),
+    );
+    const cashflows: Cashflow[] = Array.from({ length: 83 }, (_, i) => ({
+      t: epoch - (i * 165 + 15) * 60_000,
+      kind: i % 5 === 0 ? "Withdrawal" : "Deposit",
+      amountUsd: round(50 + r() * 450),
+      route: i % 3 === 0 ? "HyperEVM bridge" : "Papertrade balance",
+      status: i === 0 ? "Pending" : "Completed",
+      txHash: null,
+    }));
+    const pnl = round(
+      trades
+        .filter((t) => t.kind !== "Opened")
+        .reduce((s, t) => s + t.pnlUsd, 0),
+    );
+    const summary: Summary = {
+      address,
+      equity: round(25000 + pnl),
+      pnl,
+      paperMinted: round(trades.reduce((s, t) => s + t.paperMinted, 0)),
+      stakingRewards: round(30 + r() * 160),
+      asOf: Date.now(),
+    };
+    const result = { trades, positions, cashflows, summary };
+    accounts.set(address, result);
+    return result;
+  };
+  const positions = (address: string) =>
+    account(address).positions.map((p) => {
+      const price = mark(p.symbol),
+        pnlUsd = round(
+          ((p.sizeUsd * (price - p.entry)) / p.entry) * (p.isLong ? 1 : -1),
+        );
+      return {
+        ...p,
+        mark: price,
+        pnlUsd,
+        pnlPct: (pnlUsd / p.marginUsd) * 100,
+      };
+    });
+  const page = <T>(items: T[], cursor = "", limit = 75): Page<T> => {
+    const start = Number(cursor) || 0;
+    return {
+      items: items.slice(start, start + limit),
+      nextCursor: start + limit < items.length ? String(start + limit) : null,
+    };
+  };
   return {
     mock: true,
-    async me(): Promise<Me> {
-      await delay(120);
-      return {
-        user: "desk",
-        wallet: "0x7a3fE0c9B21d44a6e85f0C3a91b2D7e4c5A8f912",
-        sessionKey: { address: "0x51cB09aE77d3F1e2b0a4C68D9e3f2A1b7c6D4e05", expiresAt: Date.now() + 11 * 3600_000 + 42 * 60_000 },
-        limits: { maxMarginUsd: 2500, maxLeverage: 1000 },
-      };
-    },
-    async markets() {
-      await delay(100);
-      return SEED_MARKETS.map((m) => ({ ...m, mark: marks.get(m.symbol) ?? m.mark }));
+    async markets(signal) {
+      await delay(signal);
+      return ["BTC", "ETH"].map((symbol, instrumentId): Market => ({
+        instrumentId,
+        symbol,
+        mark: mark(symbol),
+        change24hPct: symbol === "BTC" ? 1.87 : -0.64,
+        volume24hUsd: symbol === "BTC" ? 184250320 : 92410850,
+      }));
     },
     async candles(symbol, tf, limit, signal) {
-      await delay(180);
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      return genCandles(symbol, tf, Math.min(limit, 1000));
+      await delay(signal);
+      return bars(symbol, tf)
+        .slice(-limit)
+        .map((b) => ({ ...b }));
     },
-    async account() {
-      await delay(90);
-      revalue();
-      return account();
-    },
-    async positions() {
-      await delay(90);
-      revalue();
-      return positions;
-    },
-    async history(limit) {
-      await delay(110);
-      return history.slice(0, limit);
-    },
-    async openOrder(order: OpenOrder) {
-      await delay(150);
-      const reserve = order.marginUsd;
-      return runIntent(() => {
-        if (order.marginUsd > account().available + reserve) return "Margin exceeds available balance";
-        const entry = marks.get(order.symbol);
-        if (!entry) return `Unknown market ${order.symbol}`;
-        positions = [
-          mkPosition(`p-${seq++}`, order.symbol, order.isLong, order.marginUsd, order.leverage, entry, Date.now(), order.takeProfitPct, order.stopLossPct),
-          ...positions,
-        ];
-        return null;
-      }, reserve);
-    },
-    async closePositions(ids) {
-      await delay(150);
-      return runIntent(() => {
-        if (!positions.some((p) => ids.includes(p.positionId))) return "Position already closed";
-        closeIds(ids);
-        return null;
-      });
-    },
-    async closeAll() {
-      await delay(150);
-      return runIntent(() => {
-        if (!positions.length) return "No open positions";
-        closeIds(positions.map((p) => p.positionId));
-        return null;
-      });
-    },
-    async intent(intentId) {
-      await delay(80);
-      return intents.get(intentId) ?? { status: "expired", error: "Unknown intent" };
-    },
-    stream(onMessage, onState: (s: StreamState) => void) {
-      listeners.add(onMessage);
-      onState("connecting");
-      const open = setTimeout(() => onState("live"), 300);
-      const tick = setInterval(() => {
-        for (const [symbol, mark] of marks) {
-          const next = mark * (1 + gaussian(rand) * 0.00035);
-          marks.set(symbol, next);
-          onMessage({ type: "mark", data: { symbol, mark: next, t: Date.now() } });
-        }
-        revalue();
-        onMessage({ type: "positions", data: positions });
-        onMessage({ type: "account", data: account() });
-      }, 1000);
-      return () => {
-        clearTimeout(open);
-        clearInterval(tick);
-        listeners.delete(onMessage);
+    async summary(address, signal) {
+      await delay(signal);
+      const a = account(address);
+      return {
+        ...a.summary,
+        equity: round(
+          a.summary.equity +
+            positions(address).reduce((s, p) => s + p.pnlUsd, 0),
+        ),
+        asOf: Date.now(),
       };
+    },
+    async positions(address, signal) {
+      await delay(signal);
+      return positions(address);
+    },
+    async trades(address, cursor, limit, signal) {
+      await delay(signal);
+      return page(account(address).trades, cursor, limit);
+    },
+    async cashflows(address, cursor, limit, signal) {
+      await delay(signal);
+      return page(account(address).cashflows, cursor, limit);
+    },
+    async portfolio(address, range, signal) {
+      await delay(signal);
+      const a = account(address);
+      const duration =
+        range === "1d"
+          ? 86400_000
+          : range === "1w"
+            ? 7 * 86400_000
+            : 10 * 86400_000;
+      const start = epoch - duration;
+      const points: PortfolioPoint[] = Array.from({ length: 150 }, (_, i) => {
+        const t = start + Math.floor((duration * i) / 149);
+        const pnl = a.trades
+          .filter((tr) => tr.closedAt !== null && Number(tr.closedAt) <= t)
+          .reduce((s, tr) => s + tr.pnlUsd, 0);
+        const open = Math.sin(i / 6) * 35;
+        return { t, equity: round(25000 + pnl + open), pnl: round(pnl + open) };
+      });
+      points[points.length - 1] = {
+        t: Date.now(),
+        equity: round(
+          a.summary.equity +
+            positions(address).reduce((s, p) => s + p.pnlUsd, 0),
+        ),
+        pnl: a.summary.pnl,
+      };
+      return { points };
     },
   };
 }

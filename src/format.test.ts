@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatCountdown,
+  formatDateTime,
   formatLeverage,
   formatPct,
   formatPrice,
   formatUsd,
   formatUsdCompact,
-  parseAmount,
   shortAddress,
   toMs,
 } from "./format";
-import { backoffDelay } from "./api";
-import { LEVERAGE_PRESETS, leverageToSlider, sliderToLeverage, validateTicket } from "./leverage";
 
 describe("formatPrice", () => {
   it("chooses decimals by magnitude", () => {
@@ -71,7 +68,9 @@ describe("misc formatting", () => {
   });
 
   it("shortens addresses", () => {
-    expect(shortAddress("0x7a3fE0c9B21d44a6e85f0C3a91b2D7e4c5A8f912")).toBe("0x7a3f…f912");
+    expect(shortAddress("0x7a3fE0c9B21d44a6e85f0C3a91b2D7e4c5A8f912")).toBe(
+      "0x7a3f…f912",
+    );
   });
 
   it("normalises seconds, milliseconds and ISO time", () => {
@@ -81,66 +80,10 @@ describe("misc formatting", () => {
     expect(toMs("nope")).toBeNull();
   });
 
-  it("counts down to session key expiry", () => {
-    const now = 1_800_000_000_000;
-    expect(formatCountdown(now + (11 * 3600 + 4 * 60) * 1000, now)).toBe("11h 04m");
-    expect(formatCountdown(now + (3 * 86400 + 2 * 3600) * 1000, now)).toBe("3d 02h");
-    expect(formatCountdown(now + 45_000, now)).toBe("45s");
-    expect(formatCountdown(now - 1, now)).toBe("expired");
-  });
-
-  it("parses typed amounts", () => {
-    expect(parseAmount("1,250.5")).toBe(1250.5);
-    expect(parseAmount(" $300 ")).toBe(300);
-    expect(parseAmount(".5")).toBe(0.5);
-    expect(parseAmount("abc")).toBeNaN();
-    expect(parseAmount("")).toBeNaN();
-  });
-});
-
-describe("leverage slider", () => {
-  it("spans 1x to the max on a log scale", () => {
-    expect(sliderToLeverage(0, 1000)).toBe(1);
-    expect(sliderToLeverage(1000, 1000)).toBe(1000);
-    expect(sliderToLeverage(500, 1000)).toBe(32); // sqrt(1000)
-  });
-
-  it("round-trips the presets it can represent exactly", () => {
-    for (const p of [10, 50, 100, 1000]) expect(sliderToLeverage(leverageToSlider(p, 1000), 1000)).toBe(p);
-    expect(LEVERAGE_PRESETS).toEqual([10, 50, 100, 250, 500, 1000]);
-  });
-
-  it("clamps to the market maximum", () => {
-    expect(sliderToLeverage(1000, 200)).toBe(200);
-    expect(leverageToSlider(500, 200)).toBe(1000);
-  });
-});
-
-describe("validateTicket", () => {
-  const limits = { available: 1000, maxMarginUsd: 500, maxLeverage: 1000 };
-  const ok = { marginUsd: 100, leverage: 50, takeProfitPct: null, stopLossPct: null };
-
-  it("accepts a valid order", () => {
-    expect(validateTicket(ok, limits)).toEqual({});
-  });
-
-  it("explains margin problems as the fix", () => {
-    expect(validateTicket({ ...ok, marginUsd: NaN }, limits).marginUsd).toBe("Enter a margin above $0.");
-    expect(validateTicket({ ...ok, marginUsd: 600 }, limits).marginUsd).toMatch(/at most \$500\.00/);
-    expect(validateTicket({ ...ok, marginUsd: 400 }, { ...limits, available: 300 }).marginUsd).toMatch(/available/);
-  });
-
-  it("rejects a stop loss beyond the bust distance", () => {
-    expect(validateTicket({ ...ok, leverage: 100, stopLossPct: 1 }, limits).stopLossPct).toMatch(/less than 1\.000%/);
-    expect(validateTicket({ ...ok, leverage: 100, stopLossPct: 0.5 }, limits)).toEqual({});
-  });
-});
-
-describe("stream backoff", () => {
-  it("doubles from 500ms to a 15s ceiling with bounded jitter", () => {
-    expect(backoffDelay(0, () => 0)).toBe(500);
-    expect(backoffDelay(3, () => 0)).toBe(4000);
-    expect(backoffDelay(10, () => 0)).toBe(15000);
-    expect(backoffDelay(10, () => 1)).toBe(12000);
+  it("always formats UTC regardless of the browser timezone", () => {
+    expect(formatDateTime("2026-11-03T05:06:00-05:00")).toBe(
+      "2026-11-03 10:06",
+    );
+    expect(formatDateTime(null)).toBe("--");
   });
 });
