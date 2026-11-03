@@ -3,9 +3,9 @@ import { ColorType, LineSeries, createChart, type UTCTimestamp } from "lightweig
 import { TIMEFRAME_SECONDS, type Backend, type Candle, type Timeframe, type Trade } from "../api";
 import { formatDateTime, formatPrice, toMs } from "../format";
 import { settledTrades } from "../stats";
-import { compareAccount, type AlignmentGroup, type SignalSymbol } from "../signal";
-import { analyseErl } from "../useErl";
-import { ErlExplainer, SIGNAL_TIMEFRAMES } from "./SignalPanel";
+import { compareAccount, type AlignmentGroup, type BacktestStats as Stats, type SignalSymbol } from "../signal";
+import { analyseErl, BUILDER_SENSITIVITY, invalidText } from "../useErl";
+import { ErlExplainer, PROFILE_DISCLOSURE, SIGNAL_TIMEFRAMES } from "./SignalPanel";
 
 const pct = (n: number | null) => (n === null ? "--" : `${n.toFixed(1)}%`);
 const margins = (n: number) => `${n >= 0 ? "+" : ""}${(n * 100).toFixed(1)}%`;
@@ -27,10 +27,17 @@ export function Backtest({ backend, trades }: { backend: Backend; trades: Trade[
       .catch(() => !ctrl.signal.aborted && setError("Candles unavailable for the backtest."));
     return () => ctrl.abort();
   }, [backend, symbol, tf, retry]);
-  const result = useMemo(
-    () => (candles?.length ? analyseErl(candles, symbol, tf, Math.floor(Date.now() / 1000)) : null),
-    [candles, symbol, tf],
-  );
+  const runs = useMemo(() => {
+    if (!candles?.length) return null;
+    const now = Math.floor(Date.now() / 1000);
+    // The sensitivity reruns the whole pass with a 0.5% builder fee: gates and fees both change.
+    return {
+      base: analyseErl(candles, symbol, tf, now),
+      builder: analyseErl(candles, symbol, tf, now, BUILDER_SENSITIVITY),
+    };
+  }, [candles, symbol, tf]);
+  const invalid = runs?.base.invalid ?? null;
+  const result = invalid ? null : (runs?.base ?? null);
   const alignment = useMemo(() => {
     if (!result || !candles || !trades) return null;
     const entries = settledTrades(trades)
@@ -43,6 +50,7 @@ export function Backtest({ backend, trades }: { backend: Backend; trades: Trade[
     return compareAccount(entries, candles, result.bt, TIMEFRAME_SECONDS[tf]);
   }, [result, candles, trades, symbol, tf]);
   const s = result?.bt.stats;
+  const b = invalid ? null : (runs?.builder.bt.stats ?? null);
   const span = candles?.length
     ? `${formatDateTime(candles[0].t * 1000)} – ${formatDateTime(candles.at(-1)!.t * 1000)} UTC`
     : "";
@@ -81,15 +89,20 @@ export function Backtest({ backend, trades }: { backend: Backend; trades: Trade[
         </div>
         <p className="hint">{span || "Loading candles…"}</p>
       </div>
-      {error ? (
+      {error || invalid ? (
         <div className="local-error" role="alert">
-          {error}{" "}
+          {error ||
+            `Candle series rejected: ${invalidText(invalid!)}. No signals or backtest results are computed from rejected data.`}{" "}
           <button className="btn" type="button" onClick={() => setRetry((n) => n + 1)}>
-            Retry backtest
+            {error ? "Retry backtest" : "Reload candles"}
           </button>
         </div>
       ) : (
         <>
+          <p className="hint pad">
+            Payout: {PROFILE_DISCLOSURE}. Candle-only core, no live filters (no liquidation
+            history exists).
+          </p>
           <dl className="stats-grid">
             {(cells.length ? cells : [["Trades", "--"] as [string, string]]).map(([label, value, color]) => (
               <div className="stat" key={label}>
@@ -98,6 +111,7 @@ export function Backtest({ backend, trades }: { backend: Backend; trades: Trade[
               </div>
             ))}
           </dl>
+          <BuilderSensitivity base={s ?? null} builder={b} />
           <EquityCurve points={result?.bt.equity ?? null} />
           <p className="hint pad">
             Fixed margin per trade; results are percent of one margin. Next-bar-open fills,
@@ -160,6 +174,41 @@ export function Backtest({ backend, trades }: { backend: Backend; trades: Trade[
   );
 }
 
+function BuilderSensitivity({ base, builder }: { base: Stats | null; builder: Stats | null }) {
+  const rows: [string, (x: Stats) => string][] = [
+    ["Trades", (x) => String(x.trades)],
+    ["Win rate", (x) => pct(x.winRate)],
+    ["Average R", (x) => (x.avgR === null ? "--" : `${x.avgR >= 0 ? "+" : ""}${x.avgR.toFixed(2)}R`)],
+    ["Net, % of margin", (x) => margins(x.net)],
+    ["Max drawdown", (x) => `${(x.maxDrawdown * 100).toFixed(1)}%`],
+  ];
+  return (
+    <div className="table-scroll" role="region" aria-label="Builder-fee sensitivity" tabIndex={0}>
+      <table className="grid grid-compact">
+        <caption className="table-caption">
+          Builder-fee sensitivity · each column reruns entry gates and fees
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            <th className="r" scope="col">Builder 0%</th>
+            <th className="r" scope="col">Builder 0.5%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, f]) => (
+            <tr key={label}>
+              <th scope="row">{label}</th>
+              <td className="r">{base ? f(base) : "--"}</td>
+              <td className="r">{builder ? f(builder) : "--"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function AlignmentTable({
   groups,
 }: {
@@ -172,7 +221,7 @@ function AlignmentTable({
   ];
   return (
     <div className="table-scroll" role="region" aria-label="Account entries versus ERL-100" tabIndex={0}>
-      <table className="grid">
+      <table className="grid grid-compact">
         <caption className="table-caption">
           Viewed account’s entries vs. ERL-100
           {groups ? ` · ${groups.outside} outside the loaded candles` : ""}

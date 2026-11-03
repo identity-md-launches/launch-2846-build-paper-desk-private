@@ -1278,6 +1278,26 @@ button:not(:disabled):active {
 .sig-exit {
   color: var(--color-accent);
 }
+/* Small two-to-four-column tables in F3 fit at 320 wide instead of scrolling. */
+.grid-compact {
+  white-space: normal;
+}
+.grid-compact th,
+.grid-compact td {
+  padding-inline: 12px;
+}
+.sig-blocked {
+  color: var(--color-bust);
+}
+.sig-error {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  color: var(--color-loss);
+  font-size: var(--fs-xs);
+}
 .sig-rows {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

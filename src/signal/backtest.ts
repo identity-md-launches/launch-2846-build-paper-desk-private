@@ -118,9 +118,11 @@ export function runBacktest(
     }
     const trade = simulate(candles, n, cand, a, fi, Δ, p, prof);
     trades.push(trade);
-    if (trade.exitIndex === null || trade.status === "OPEN" || trade.status === "EXIT_PENDING") {
+    // One position per symbol: anything short of an observed exit (open, exit pending, or a
+    // data gap that leaves the risk unresolved) keeps the lock; cooldown starts only after a close.
+    if (trade.status !== "CLOSED" || trade.exitIndex === null) {
       nextAllowed = Infinity;
-      break;
+      continue;
     }
     nextAllowed = trade.exitIndex + p.cooldownBars + 1;
   }
@@ -175,14 +177,17 @@ function simulate(
     const k = fi + h - 1;
     if (k >= n) return t;
     if (h > 1 && candles[k].t !== candles[k - 1].t + Δ) {
+      // Missing observations cannot resolve the risk: no exit is established (§4.2).
       t.status = "UNRESOLVED_GAP";
-      t.exitIndex = k - 1;
       return t;
     }
     t.holdingBars = h;
     const d = dirBar(candles[k], s);
     if (h > 1 && d.O <= Bx) return close(k, candles[k].t, t.bust, "BUST");
     if (h > 1 && d.O <= Sx) return close(k, candles[k].t, candles[k].o, "GAP_STOP");
+    // An open at/through the standing target already touched it: settle at the frozen target,
+    // never at the better gap open (§8.1), and before the bar's later range is considered.
+    if (h > 1 && d.O >= Tx) return close(k, candles[k].t, t.rawTarget, "TARGET");
     if (d.L <= Sx) {
       t.bustStress = d.L <= Bx;
       return close(k, candles[k].t + Δ, t.rawStop, "STOP");
@@ -250,8 +255,11 @@ export type SignalStateCode = "LONG" | "SHORT" | "FLAT" | "EXIT";
 
 export interface SignalState {
   state: SignalStateCode;
-  /** "pending" while a just-confirmed candidate awaits its next-bar fill. */
-  phase: "pending" | "open" | "exit" | "flat";
+  /**
+   * "pending" while a just-confirmed candidate awaits its next-bar fill; "unresolved" when a
+   * data gap interrupted a position, so its risk has no observed exit and no new entry is allowed.
+   */
+  phase: "pending" | "open" | "exit" | "unresolved" | "flat";
   candidate: ErlCandidate | null;
   trade: SimTrade | null;
   stop: number | null;
@@ -299,6 +307,17 @@ export function signalState(
       ...base,
       state: tr.side === 1 ? "LONG" : "SHORT",
       phase: "open",
+      candidate: tr.candidate,
+      trade: tr,
+      stop: tr.rawStop,
+      target: tr.rawTarget,
+      barsSince: since,
+    };
+  if (tr.status === "UNRESOLVED_GAP")
+    return {
+      ...base,
+      state: tr.reason ? "EXIT" : tr.side === 1 ? "LONG" : "SHORT",
+      phase: "unresolved",
       candidate: tr.candidate,
       trade: tr,
       stop: tr.rawStop,

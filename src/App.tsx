@@ -75,6 +75,8 @@ export function App() {
       tf={signalTf}
       onTf={setSignalTf}
       asOfSec={erl.markets.find((m) => m.map)?.map?.asOfSec ?? null}
+      summaryError={erl.summaryError}
+      onRetry={erl.retry}
     />
   );
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);

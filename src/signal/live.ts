@@ -323,3 +323,28 @@ export function nearestClusters(
   };
   return { long: pick("longUsd", true), short: pick("shortUsd", false) };
 }
+
+/** Live statuses that leave a core candidate actionable in the live-enabled view. */
+export const LIVE_CLEAR: readonly LiveStatus[] = ["NO MAP VETO", "NO MAP EVIDENCE"];
+
+export interface EntryEligibility {
+  /** True only when the core candidate is pending and the live layer did not block or fail. */
+  actionable: boolean;
+  /** Why a pending core candidate is not actionable; null when actionable or no candidate. */
+  blockReason: string | null;
+}
+
+/**
+ * Separates the immutable core candidate from current live entry eligibility (§5). Missing,
+ * stale, invalid, vetoed or payout-risk live results keep the candidate but block the entry.
+ * `context` adds a route-level reason (e.g. "Protocol summary HTTP 503") to UNKNOWN results.
+ */
+export function entryEligibility(
+  live: LiveAssessment | null,
+  context: readonly string[] = [],
+): EntryEligibility {
+  if (!live) return { actionable: false, blockReason: ["Live assessment unavailable.", ...context].join(" ") };
+  if (LIVE_CLEAR.includes(live.status)) return { actionable: true, blockReason: null };
+  const why = [...live.reasons, ...(live.status === "UNKNOWN" ? context : [])].join(" ");
+  return { actionable: false, blockReason: `${live.status}${why ? ` · ${why}` : ""}` };
+}

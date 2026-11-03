@@ -89,3 +89,29 @@ Scratch scaffolding is ephemeral. Only the useful evidence above was copied into
 - Axe's incomplete/manual items and canvas compositions are not full accessibility conformance evidence. Manual color samples and the probe complement that limitation.
 - The 1,000-candle contract bounds sigma classification/chart placement; unavailable context is visibly unclassified/off-range. Very large histories use proportional client memory.
 - Publication/hosting is outside this job. Source, unchanged lockfile and complete static export are the deliverable.
+
+
+## v3 revision 2: review findings
+
+This revision answers the reopened review. These are worker-run checks; the verifier checks paths and bytes only.
+
+| Finding | Source after fix | Change | Check |
+| --- | --- | --- | --- |
+| Unresolved gap released the position lock | `src/signal/backtest.ts` (`runBacktest`, `simulate`) | Any status other than CLOSED keeps the lock and later candidates are recorded as POSITION_OR_COOLDOWN skips. A gap during holding no longer sets an exit index. `signalState` reports phase `unresolved` with the frozen stop/target | Vitest: the reviewer's two-setup fixture now has candidates 26 and 54, one UNRESOLVED_GAP trade with null exit, no pending plan, and still one trade after another bar is appended |
+| Opening gap past target settled as a stop | `src/signal/backtest.ts` (`simulate`) | After the bust/stop open checks, an open at or past the target settles at the frozen target | Vitest, long and mirrored short |
+| Live veto did not block the entry state | `src/signal/live.ts` (`entryEligibility`), `src/useErl.ts`, `src/components/SignalPanel.tsx` | Pending candidates are actionable only with NO MAP VETO or NO MAP EVIDENCE. Otherwise the badge reads “Core LONG · NO NEW ENTRY” and the live row gives the reason, including the route error | Vitest plus Chromium: VETO and summary HTTP 503 |
+| Chart entry arrows repainted | `src/components/Chart.tsx` (`erlLayer`) | Arrows come from `erl.candidates`; exits and skipped fills are separate markers | Chromium: 1 confirmed signal before and after the next bar fails the drift check |
+| Payout disclosure and builder sensitivity missing | `src/components/Backtest.tsx`, `src/components/SignalPanel.tsx`, `src/useErl.ts` | Disclosure line on F1, F3 and in the explainer. F3 runs `analyseErl(..., 0.005)`, a full recompute | Vitest: 0.5% pnl = 0% pnl × 0.975/0.98 on the fixture. Chromium: both columns render |
+| Invalid candles shown as FLAT and zero results | `src/useErl.ts`, `SignalPanel.tsx`, `Backtest.tsx` | INVALID results carry the first diagnostic. F1 shows INVALID DATA with a refresh button; F3 shows an alert with a reload button and no numbers | Chromium: row 3 negative volume |
+| Failed candle refresh hidden | `src/useErl.ts`, `SignalPanel.tsx` | The error always shows next to retained values, with STALE, the last good bar time and a retry. A pending entry becomes NO NEW ENTRY | Chromium: 503 after 16.5 s, then retry recovers |
+| Expired map shown as live clusters | `src/useErl.ts`, `SignalPanel.tsx` | Freshness is checked whether or not a candidate exists; stale maps show STALE and UNKNOWN with the snapshot time | Chromium: 120 s old map |
+| Chart closed bars from quote samples | `src/components/Chart.tsx`, `src/useErl.ts` (`closedAtFetch`) | The ERL layer reads only the feed snapshot's closed bars. The chart reconciles with `/api/candles` every 15 s and after each roll. The panel likewise ignores bars that were forming at fetch time | Chromium: the chart moves from FLAT to LONG after the roll with no reload, matching the panel |
+
+Better Interface recheck of the changed surfaces:
+
+- Writing: the block reasons are specific (VETO, UNKNOWN with the HTTP status, STALE CANDLES), and the duplicated reason under the badge was shortened after a 390 screenshot.
+- Layout: the F3 sensitivity and alignment tables scrolled at 390 and hid a column. `.grid-compact` lets their captions wrap, and the re-screenshot shows every column.
+- Colors: the new states reuse `--color-bust` and `--color-loss`, both measured at 4.5:1 or better in v2.
+- Accessibility: the retry buttons are native buttons with specific names (“Retry BTC candles”).
+
+Not performed this round: axe, the 40-check interaction suite, a real backend, Safari/WebKit and a screen reader.

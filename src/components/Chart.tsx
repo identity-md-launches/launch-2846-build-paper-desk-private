@@ -36,7 +36,7 @@ import {
   type BandPoint,
 } from "../indicators";
 import { accountMarkers } from "../chartOverlays";
-import { analyseErl } from "../useErl";
+import { analyseErl, closedAtFetch } from "../useErl";
 import { formatDateTime, formatPrice } from "../format";
 
 const BAND_STYLE: { key: keyof Omit<BandPoint, "sd">; color: string }[] = [
@@ -112,6 +112,13 @@ export function Chart({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const anchorsRef = useRef<ISeriesApi<"Line">[]>([]);
   const barsRef = useRef<Candle[]>([]);
+  /**
+   * Last validated feed snapshot, closed bars only, never touched by quote sampling. The ERL
+   * layer reads only this, so it matches the signal panel's bar-closed candles.
+   */
+  const feedRef = useRef<Candle[]>([]);
+  const [reconcile, setReconcile] = useState(0);
+  const reconcileTimer = useRef<number | undefined>(undefined);
   const bandsRef = useRef<(BandPoint | null)[]>([]);
   const levelsRef = useRef<Level[]>([]);
   const levelsVersionRef = useRef(-1);
@@ -312,7 +319,7 @@ export function Chart({
     setOverlayCount({ visible: account.visible, total: account.total });
     const erl =
       loadedKeyRef.current === `${o.symbol}:${o.timeframe}`
-        ? erlLayer(bars, o.signal, o.symbol, o.timeframe)
+        ? erlLayer(feedRef.current, o.signal, o.symbol, o.timeframe)
         : [];
     const base = o.overlays ? [...markers, ...account.markers] : markers;
     const all = [...base, ...erl];
@@ -377,18 +384,21 @@ export function Chart({
       setErlNote(`ERL-100 entries are 1m/5m only; ${tf} shows geometry only.`);
       return out;
     }
-    const entry = (i: number, side: 1 | -1) =>
+    // Entry arrows come from the immutable confirmed candidates, so a later fill skip or
+    // execution result can never remove or move them (§4.8). Execution is drawn separately.
+    for (const c of erl.candidates) {
+      if (!c.entryAllowed) continue;
       out.push({
-        time: asTime(bars[i].t),
-        position: side === 1 ? "belowBar" : "aboveBar",
-        shape: side === 1 ? "arrowUp" : "arrowDown",
+        time: asTime(c.t),
+        position: c.side === 1 ? "belowBar" : "aboveBar",
+        shape: c.side === 1 ? "arrowUp" : "arrowDown",
         color: "#ff8c00",
         size: 0.6,
         text: "ERL",
       });
+    }
     for (const t of bt.trades) {
-      entry(t.candidate.index, t.side);
-      if (t.exitIndex !== null && t.status !== "OPEN")
+      if (t.exitIndex !== null && t.status === "CLOSED")
         out.push({
           time: asTime(bars[t.exitIndex].t),
           position: t.side === 1 ? "aboveBar" : "belowBar",
@@ -397,7 +407,20 @@ export function Chart({
           size: 0.5,
         });
     }
-    if (bt.pending) entry(bt.pending.index, bt.pending.side);
+    // Simulated fills rejected at the next bar (drift, re-check, gap): a small grey dot on the
+    // fill bar, separate from the candidate's arrow.
+    const skippedFills = bt.skipped.filter((k) => !k.reasons.includes("POSITION_OR_COOLDOWN"));
+    for (const k of skippedFills) {
+      const fi = k.candidate.index + 1;
+      if (fi < bars.length)
+        out.push({
+          time: asTime(bars[fi].t),
+          position: k.candidate.side === 1 ? "belowBar" : "aboveBar",
+          shape: "circle",
+          color: "#8f8676",
+          size: 0.4,
+        });
+    }
     if (state.stop !== null && candles)
       erlPriceLineRef.current = candles.createPriceLine({
         price: state.stop,
@@ -407,8 +430,11 @@ export function Chart({
         axisLabelVisible: true,
         title: "ERL stop",
       });
+    const confirmed = erl.candidates.filter((c) => c.entryAllowed).length;
     setErlNote(
-      `ERL-100 · ${bt.trades.length} signals in loaded ${tf} candles · current ${state.state}`,
+      erl.status === "INVALID"
+        ? `ERL-100 · candle series rejected (${erl.diagnostics[0]?.code ?? "INVALID"}) · no signals`
+        : `ERL-100 candle-only core · ${confirmed} confirmed signals in loaded ${tf} candles · ${bt.trades.length} simulated fills, ${skippedFills.length} fills skipped · current ${state.state}`,
     );
     return out;
   };
@@ -483,7 +509,9 @@ export function Chart({
       .candles(symbol, timeframe, CANDLE_LIMIT, ctrl.signal)
       .then((rows) => {
         if (ctrl.signal.aborted || !chartRef.current) return;
-        barsRef.current = rows;
+        // Quote sampling mutates the forming bar, so the chart gets copies of the feed rows.
+        barsRef.current = rows.map((b) => ({ ...b }));
+        feedRef.current = closedAtFetch(rows, timeframe, Math.floor(Date.now() / 1000));
         loadedKeyRef.current = `${symbol}:${timeframe}`;
         applyAll();
         const range = initialRange(rows.length, 160);
@@ -519,6 +547,44 @@ export function Chart({
     return () => ctrl.abort();
   }, [backend, symbol, timeframe, retry, applyAll]);
 
+  // Reconcile with the candle feed every 15 s and shortly after each bar roll: closed OHLC
+  // always comes from /api/candles, quote samples only shape the forming bar.
+  useEffect(() => {
+    if (status.state !== "ready") return;
+    const id = window.setInterval(() => setReconcile((n) => n + 1), 15_000);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(reconcileTimer.current);
+    };
+  }, [status.state]);
+  useEffect(() => {
+    if (!reconcile || document.visibilityState !== "visible") return;
+    const { symbol: sym, timeframe: tf } = overlayRef.current;
+    const key = `${sym}:${tf}`;
+    if (loadedKeyRef.current !== key) return;
+    const ctrl = new AbortController();
+    backend
+      .candles(sym, tf, CANDLE_LIMIT, ctrl.signal)
+      .then((rows) => {
+        const chart = chartRef.current;
+        if (ctrl.signal.aborted || !chart || loadedKeyRef.current !== key || !rows.length) return;
+        feedRef.current = closedAtFetch(rows, tf, Math.floor(Date.now() / 1000));
+        const bars = rows.map((b) => ({ ...b }));
+        const sampled = barsRef.current.at(-1);
+        // Keep a forming bar the feed has not opened yet.
+        if (sampled && sampled.t > bars[bars.length - 1].t) bars.push(sampled);
+        const range = chart.timeScale().getVisibleLogicalRange();
+        const shift = bars.length - barsRef.current.length;
+        barsRef.current = bars;
+        applyAll();
+        if (range) chart.timeScale().setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift });
+      })
+      .catch(() => {
+        // A failed reconcile keeps the previous feed snapshot; the main load shows hard errors.
+      });
+    return () => ctrl.abort();
+  }, [reconcile, backend, applyAll]);
+
   // Fold each polled mark into the forming bar, or open a new bar when the bucket rolls over.
   useEffect(() => {
     if (!mark || status.state !== "ready") return;
@@ -540,6 +606,9 @@ export function Chart({
       });
       applyAll();
       setVersion((v) => v + 1);
+      // The just-closed bar is shown from sampled quotes until the feed's completed bar arrives.
+      window.clearTimeout(reconcileTimer.current);
+      reconcileTimer.current = window.setTimeout(() => setReconcile((n) => n + 1), 1500);
     } else {
       last.c = mark.price;
       last.h = Math.max(last.h, mark.price);

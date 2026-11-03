@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessErlLive,
   compareAccount,
+  entryEligibility,
   computeErl,
   freshness,
   mass,
@@ -67,6 +68,45 @@ describe("backtest execution", () => {
     const b = run(bust).bt.trades[0];
     expect(b.reason).toBe("BUST");
     expect(b.pnl).toBe(-1);
+  });
+  it("settles an opening gap through the target at the frozen target, before the later low", () => {
+    const c = extend(longSetup(), [
+      [E, 100.1, 100.04, 100.08],
+      [100.6, 100.7, 99.9, 100.6],
+    ]);
+    const t = run(c).bt.trades[0];
+    expect(t.reason).toBe("TARGET");
+    expect(t.exitPrice).toBeCloseTo(t.rawTarget, 12);
+    expect(t.exitPrice).toBeLessThan(100.6);
+    expect(t.pnl!).toBeGreaterThan(0);
+    const m = mirror(c);
+    const erl = computeErl(m, { symbol: "BTC", timeframeSec: 60, nowSec: m.at(-1)!.t + 60 });
+    const s = runBacktest(m, erl, 60, prof).trades[0];
+    expect(s.side).toBe(-1);
+    expect(s.reason).toBe("TARGET");
+    expect(s.exitPrice).toBeCloseTo(s.rawTarget, 12);
+    expect(s.pnl!).toBeGreaterThan(0);
+  });
+  it("keeps the one-position lock while a data gap leaves a trade unresolved", () => {
+    const first = extend(longSetup(), [[E, 100.1, 100.04, 100.08]]);
+    const second = longSetup().map((b) => ({ ...b, t: b.t + 40 * 60 }));
+    const c = [...first, ...second];
+    const { erl, bt } = run(c);
+    expect(erl.candidates.filter((x) => x.entryAllowed).map((x) => x.index)).toEqual([26, 54]);
+    expect(bt.trades).toHaveLength(1);
+    expect(bt.trades[0].status).toBe("UNRESOLVED_GAP");
+    expect(bt.trades[0].exitIndex).toBeNull();
+    expect(bt.trades[0].exitTime).toBeNull();
+    expect(bt.pending).toBeNull();
+    const st = signalState(erl, bt, c.at(-1)!.t + 60);
+    expect(st.phase).toBe("unresolved");
+    expect(st.state).toBe("LONG");
+    expect(st.stop).toBe(bt.trades[0].rawStop);
+    const more = [...c, { t: c.at(-1)!.t + 60, o: E, h: 100.1, l: 100.04, c: 100.08, v: 10 }];
+    const later = run(more).bt;
+    expect(later.trades).toHaveLength(1);
+    expect(later.trades[0].status).toBe("UNRESOLVED_GAP");
+    expect(later.skipped.some((x) => x.candidate.index === 54)).toBe(true);
   });
   it("exits on a closed-bar frontier failure at the following open", () => {
     const c = extend(longSetup(), [
@@ -303,5 +343,33 @@ describe("cluster runs", () => {
     expect(n.long!.hi).toBeGreaterThan(n.long!.peak);
     expect(n.long!.usd).toBeGreaterThan(50_000);
     expect(n.short).toBeNull();
+  });
+});
+
+describe("entry eligibility", () => {
+  const base = {
+    reasons: [] as string[],
+    adverseUsd: null,
+    favorableUsd: null,
+    nearUsd: null,
+    crowding: null,
+    materialUsd: null,
+    asOfSec: null,
+    lpAccountingVerified: false as const,
+  };
+  it("is actionable only for NO MAP VETO and NO MAP EVIDENCE", () => {
+    expect(entryEligibility({ ...base, status: "NO MAP VETO" }).actionable).toBe(true);
+    expect(entryEligibility({ ...base, status: "NO MAP EVIDENCE" }).actionable).toBe(true);
+    for (const status of ["VETO", "UNKNOWN", "RANGE INSUFFICIENT", "PAYOUT RISK — NO NEW ENTRY", "NOT LATEST BAR"] as const) {
+      const e = entryEligibility({ ...base, status, reasons: ["why"] });
+      expect(e.actionable).toBe(false);
+      expect(e.blockReason).toContain(status);
+      expect(e.blockReason).toContain("why");
+    }
+    expect(entryEligibility(null).actionable).toBe(false);
+  });
+  it("adds route-level context to UNKNOWN only", () => {
+    expect(entryEligibility({ ...base, status: "UNKNOWN" }, ["Protocol summary: HTTP 503"]).blockReason).toContain("HTTP 503");
+    expect(entryEligibility({ ...base, status: "VETO" }, ["Protocol summary: HTTP 503"]).blockReason).not.toContain("HTTP 503");
   });
 });
