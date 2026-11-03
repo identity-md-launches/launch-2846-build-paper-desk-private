@@ -86,6 +86,38 @@ export interface Page<T> {
   items: T[];
   nextCursor: string | null;
 }
+export type LiquidationRange = 1 | 2 | 5 | 10 | 25;
+export type SignalSymbol = "BTC" | "ETH";
+export interface LiqAmounts {
+  longUsd: number;
+  shortUsd: number;
+  longCount: number;
+  shortCount: number;
+}
+export interface LiquidationBucket extends LiqAmounts {
+  lo: number;
+  hi: number;
+}
+/** Live snapshot of Papertrade resting liquidation levels. No history exists. */
+export interface LiquidationMap {
+  symbol: SignalSymbol;
+  rangePct: LiquidationRange;
+  from: number;
+  to: number;
+  asOf: Timestamp;
+  buckets: LiquidationBucket[];
+  below: LiqAmounts;
+  above: LiqAmounts;
+}
+export interface ProtocolSummary {
+  asOf: Timestamp;
+  tvlUsd: number;
+  marginUsd: number;
+  lpUsd: number;
+  queueUsd: number;
+  openPositions: number;
+  lifetimeVolumeUsd: number;
+}
 export interface Backend {
   readonly mock: boolean;
   markets(signal?: AbortSignal): Promise<Market[]>;
@@ -114,6 +146,12 @@ export interface Backend {
     limit?: number,
     signal?: AbortSignal,
   ): Promise<Page<Cashflow>>;
+  liquidationMap(
+    symbol: SignalSymbol,
+    range: LiquidationRange,
+    signal?: AbortSignal,
+  ): Promise<LiquidationMap>;
+  protocolSummary(signal?: AbortSignal): Promise<ProtocolSummary>;
 }
 export class ApiError extends Error {
   constructor(
@@ -229,6 +267,13 @@ export const httpBackend: Backend = {
         ),
       { items: [], nextCursor: null },
     ),
+  // Types alone do not validate JSON: src/signal/live.ts checks these before use.
+  liquidationMap: (symbol, range, signal) =>
+    get<LiquidationMap>(
+      `/markets/${encodeURIComponent(symbol)}/liquidation-map?range=${range}`,
+      signal,
+    ),
+  protocolSummary: (signal) => get<ProtocolSummary>("/protocol/summary", signal),
 };
 /** Exhaust cursor pages for complete client-side stats, filtering and CSV exports. */
 export async function readAllPages<T>(

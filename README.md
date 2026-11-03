@@ -1,6 +1,6 @@
 # PAPER DESK
 
-A **read-only account viewer for Papertrade** (papertrade.xyz), the synthetic perps exchange on HyperEVM priced at Hyperliquid mid. Paste any public EVM address to inspect its BTC (instrumentId `0`) and ETH (instrumentId `1`) activity, with the existing BB(15) sigma ladder overlaid.
+A **read-only account viewer for Papertrade** (papertrade.xyz), the synthetic perps exchange on HyperEVM priced at Hyperliquid mid. Paste any public EVM address to inspect its BTC (instrumentId `0`) and ETH (instrumentId `1`) activity, with the existing BB(15) sigma ladder overlaid. Version 3 adds **ERL-100 (Excursion Restitution Ledger)**, an original bar-closed entry/exit indicator for 100× BTC and ETH trades on Papertrade, with a live liquidation-map veto and a Papertrade-rules backtest.
 
 There is no wallet connection, signing, session key, order ticket or transaction action. The browser sends only GET requests to its own origin under `/api`. Fonts, scripts and images are bundled locally. A backend implementing the contract below is needed for real account data; the static export does not contain or operate that service.
 
@@ -28,7 +28,7 @@ npm run preview         # preview dist; open ?mock=1 without a backend
 - The dropdown stores the last ten unique addresses in this browser's `localStorage`. **Name address** adds or edits an optional nickname. If storage is unavailable, the current visit still works. No account is automatically loaded from storage.
 - **`?mock=1`** enables a separate, locally bundled synthetic backend for any valid address. `VITE_MOCK=1` also enables it at development/build time. The visible **MOCK DATA** badge always identifies this mode.
 
-Mock data is deterministic per address: BTC/ETH candles on all six timeframes, three open positions, 158 settled positions plus three Opened events, 83 cashflows (including a pending withdrawal), and portfolio curves. Prices move modestly on quote polls. Synthetic transactions have no invented transaction hash. Mock mode makes no API or third-party requests.
+Mock mode also serves deterministic synthetic liquidation maps (150 buckets around the mock mark, all five ranges, re-seeded every 30 s) and a protocol summary with an empty queue. They are synthetic and are not Papertrade liquidity. Mock data is deterministic per address: BTC/ETH candles on all six timeframes, three open positions, 158 settled positions plus three Opened events, 83 cashflows (including a pending withdrawal), and portfolio curves. Prices move modestly on quote polls. Synthetic transactions have no invented transaction hash. Mock mode makes no API or third-party requests.
 
 An unknown or empty account shows **“No activity for this account.”** A backend failure shows **ERROR**, keeps the last successful data and offers a retry; it never silently substitutes mock data.
 
@@ -40,11 +40,29 @@ The existing indicator engine and its tests are unchanged: SMA(15), population s
 
 Account overlays add a green up arrow below long-entry bars, red down arrow above short-entry bars, small neutral exit squares, and hot-pink `#FF2D78` **✕ LIQ** liquidation markers. Because lightweight-charts v5 has no X-shaped built-in marker, liquidations use a zero-size square with the literal X and LIQ text. Open-position entry lines are gray and solid; bust lines are hot pink and dashed only within 35% of mark. The existing invisible anchors keep position levels in autoscale. A counter reports events inside loaded candle history; events outside it are never snapped to an unrelated bar.
 
+Above the market toolbar, the always-visible **ERL-100 signal** panel shows, per market, the current state (**LONG / SHORT / FLAT / EXIT**), a confidence band with the ERL score, the stop in price and percent and as a share of the 1% bust distance at 100×, the target, bars since the signal and holding bar, the nearest large long and short liquidation clusters from the live map, and the live veto status. Its own 1m/5m selector picks the signal timeframe. **How ERL-100 works** opens a short explainer. The **Signal** checkbox beside Account overlays draws the ERL layer on the chart: small orange ERL entry arrows on the confirming bar, small exit squares, dashed stop and dotted target lines across each holding window and an **ERL stop** price line for the current plan. The Bollinger ladder, its markers and account overlays stay as they were. On 15m and longer, candidates are drawn as small grey circles only, because the 100× entry policy is limited to 1m and 5m.
+
 **F2 HISTORY** provides separate 75-row pages for trades and cashflows. Market, side and outcome filters compose for trades; cashflows have kind and status filters. Outcome includes Win/Loss and the backend event kinds. Each CSV exports **all matching loaded history**, across pages, with raw amounts, UTC dates and full hashes when supplied. Cells are quoted and formula-like text is escaped for spreadsheets.
 
 **F3 ANALYSIS** provides an equity area curve or PnL line curve with `1d`, `1w` and `all` ranges. Pure functions in `src/stats.ts` calculate win rate, mean/median PnL, best/worst trade, profit factor, average leverage/hold time, liquidation rate and PnL groups by market/side. The entry histogram uses each entry price relative to the containing candle's BB(15), with a selectable candle timeframe and per-bucket settled win rate.
 
+The **ERL-100 backtest at 100×** section runs the indicator on the loaded candles (BTC/ETH, 1m/5m, up to 1,000 bars). It shows trade count, win rate, profit factor, average R, net result and max drawdown as a percent of one fixed margin, busts, a bust-stress result, an equity curve and the latest 25 simulated trades. It also compares the viewed account's settled entries with the signal: entries made **with** the signal in force, **against** it, or with **no signal in force**, each with its win rate. Entries outside the loaded candles are counted separately.
+
 **F1–F3** work globally. Inside the tab bar, arrows, Home and End use roving focus. Times and CSV dates are always **UTC**.
+
+## ERL-100 indicator
+
+The specification is the v3 research report (`artifacts/papertrade-research.md` from the research job, §4–§6). The implementation lives in `src/signal/` as deterministic pure TypeScript. No function reads a clock, the network, storage or the DOM: `nowSec` is passed in.
+
+- `intervals.ts`: interval subtraction and the exact piecewise integral of the max-weight density.
+- `payoff.ts`: Papertrade's documented asymmetric-impact payout (deadband, standard and off-hours holdbacks, scale curve, 2% win fee, optional 0.5% builder fee). Losses are taken in full. The research payout table is reproduced to 0.0001 percentage points.
+- `validate.ts`: candle validation (finite positive OHLC, ordering, regular grid, gaps start new segments, still-forming bars excluded by `t+Δ <= nowSec`) and frozen default parameters.
+- `core.ts`: `computeErl`. Each wick is rejected territory and each body is accepted territory. A 24-bar ledger keeps the parts of wicks that later closed bodies have not covered, with linear recency weights. A sweep on bar j penetrates the 12-bar closing frontier by 3–25 bps and closes back above it. Bar i confirms with no retouch and at least 1 bp of progress. Stop sits 2 bps beyond the sweep (5–25 bps risk), and the target is 3× risk (20–80 bps). Entry gates: support coverage J ≥ 0.35, overhead obstacle A ≤ 0.35, net payout/risk ≥ 1.8 and score `J·(1−A)·netRR ≥ 0.80`. **A signal confirms at the close of bar i** and can fill only at the next bar's open. Both sides qualifying gives AMBIGUOUS. `assessErlFill` re-checks a fill against the frozen ledger: 2-bp drift limit, and the stop must sit 30 bps inside bust.
+- `backtest.ts`: one position per market, next-open fills, stop-first when a bar touches both levels, gap-past-stop fills at the open, gap-past-bust loses the full margin. Exits are frontier/sweep failure at the close (filled at the next open) or time after six holding bars, followed by a six-bar cooldown. `signalState` derives LONG/SHORT/FLAT/EXIT from the latest closed bar.
+- `live.ts`: **live only, no liquidation history.** Validates the map (exactly 150 contiguous buckets, matching symbol/range, 15 s staleness / 2 s future limits) and the protocol summary. The veto applies only to a candidate on the latest closed bar within its entry window. It vetoes material same-side mass crowding the adverse path or sitting within 5 bps of entry, and blocks new entries while the payout queue is active or LP ≤ 0. Results are NO MAP VETO (never "safe"), NO MAP EVIDENCE, RANGE INSUFFICIENT or UNKNOWN. `nearestClusters` reports the nearest contiguous run of large buckets on each side of price.
+- `compare.ts`: classifies account entries as with, against or without a signal in force.
+
+ERL-100 is a research hypothesis with untuned defaults. The score is a decision budget, not a probability, and no performance claim is made. PAPER emissions are valued at zero. 1,000 1m bars are about 16.7 hours and 1,000 5m bars about 3.5 days, which is too short to validate an edge.
 
 ## Read-only backend contract
 
@@ -54,6 +72,8 @@ Every request is an explicit GET with `Accept: application/json` and `credential
 | --- | --- |
 | `/api/markets` | `[{instrumentId, symbol, mark, change24hPct, volume24hUsd}]` |
 | `/api/candles?symbol=BTC&tf=15m&limit=1000` | `[{t,o,h,l,c,v}]` |
+| `/api/markets/:symbol/liquidation-map?range=1` | `{symbol, rangePct, from, to, asOf, buckets:[150 × {lo,hi,longUsd,shortUsd,longCount,shortCount}], below:{…}, above:{…}}`; range `1\|2\|5\|10\|25`, live snapshot only |
+| `/api/protocol/summary` | `{asOf, tvlUsd, marginUsd, lpUsd, queueUsd, openPositions, lifetimeVolumeUsd}` |
 | `/api/accounts/:address/summary` | `{address, equity, pnl, paperMinted, stakingRewards, asOf}` |
 | `/api/accounts/:address/portfolio?range=1d` | `{points:[{t,equity,pnl}]}` |
 | `/api/accounts/:address/positions` | `[{positionId,symbol,isLong,marginUsd,leverage,sizeUsd,entry,mark,pnlUsd,pnlPct,bustPrice,openedAt}]` |
@@ -66,6 +86,7 @@ Every request is an explicit GET with `Accept: application/json` and `credential
 - Cashflow kinds: `Deposit`, `Withdrawal`. `route` and `status` are display strings. End pagination with `nextCursor: null` (an empty string is also treated as the end). Cursors are opaque and URL-encoded.
 - The client follows all cursor pages before replacing the history snapshot, sorts events newest first and rejects repeated cursors. Pagination/filtering/CSV/statistics then operate over this complete snapshot. Very large accounts consequently require memory proportional to their returned history.
 - Empty accounts may return empty arrays/pages and a zero summary. Account endpoint **404s** are normalized to empty results; other non-2xx responses remain errors. Market/candle 404s are errors. Individual HTTP requests time out after 12 seconds and can be aborted when the address changes or the tab hides.
+- The ERL panel polls BTC and ETH candles on its timeframe every **15 seconds**, and the liquidation maps (`range=1`) plus the protocol summary every **5 seconds**, only while an address is loaded and the page is visible. Map and summary JSON is validated at runtime before use. `asOf` is normalised to Unix seconds once at the client boundary. A failed or invalid live route shows live status **UNKNOWN** and is never replaced by mock data.
 - Summary and positions poll every **5 seconds**; trades and cashflows every **30 seconds**. Market quotes also poll every 5 seconds. Requests pause while the document is hidden and both account groups refresh on return. In-flight groups do not overlap.
 - The header reads **LIVE** after both account groups succeed; **STALE** while hidden, after 15 seconds without a fast snapshot, after 65 seconds without history, or if summary `asOf` is over 15 seconds old; **ERROR** after an account-group failure. **IDLE** and **LOADING** describe initial states. Chart/portfolio errors have local recovery controls.
 
@@ -89,16 +110,13 @@ IBM Plex Mono Latin 400/600 is bundled from the existing font dependency as WOFF
 
 ## Validation
 
-Actual results and the six-domain Better Interface review are in [artifacts/validation.md](artifacts/validation.md). The worker ran the production build and typecheck, the unchanged indicator suite plus new statistics/interaction-related unit tests, browser interaction checks against the export under `/preview/`, and the pinned taste probe. Screenshots and compact machine-readable results are included in `artifacts/`.
+Actual results and the six-domain Better Interface review are in [artifacts/validation.md](artifacts/validation.md).
 
 | Check | Result |
 | --- | --- |
-| `npm run typecheck` and `npm run build` | Passed; complete production export included |
-| `npm test` | 88 tests passed in 4 files, including 40 unchanged indicator tests |
-| Chromium interactions on the production export | 31/31 passed, including GET-only paths, visibility-aware polling and CSV downloads |
-| Axe on empty selection and all three loaded screens | Zero violations; manual-review items remain documented |
-| Pinned taste probe, empty and mock-account states | 15/16 each; monospace prose retained for the requested Bloomberg look |
+| `npm run typecheck` / `npm run build` | Passed; production export in `dist/` |
+| `npm test` | 158 tests passed in 6 files: 70 new ERL-100 tests in `src/signal/`, plus the 88 existing tests unchanged |
+| Chromium interactions on the export under `/preview/` (`test/scratch/interactions.mjs`) | 40/40 passed at 390 and 1440 wide, plus the real-backend path check and the empty first screen |
+| Pinned taste probe on the empty export and the mock account view | 15/16 each; the one failure is monospace prose, kept for the requested Bloomberg look |
 
-Build/test commands ran in a temporary copy with the unchanged manifest and lockfile, keeping installed dependencies out of the repository. The complete checked export was copied into `dist/`.
-
-Real backend integration, a physical device, a screen reader and Safari/WebKit remain unverified. WebKit was installed but could not launch because this machine lacks its required shared libraries. The HTTP integration checks used intercepted same-origin responses; the mock checks used the actual exported mock implementation.
+Real backend integration, a physical device, a screen reader and Safari/WebKit remain unverified. Axe was not rerun for v3; `artifacts/accessibility.json` is the v2 record.

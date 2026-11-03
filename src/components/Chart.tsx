@@ -36,6 +36,7 @@ import {
   type BandPoint,
 } from "../indicators";
 import { accountMarkers } from "../chartOverlays";
+import { analyseErl } from "../useErl";
 import { formatDateTime, formatPrice } from "../format";
 
 const BAND_STYLE: { key: keyof Omit<BandPoint, "sd">; color: string }[] = [
@@ -62,6 +63,8 @@ interface Props {
   trades: Trade[];
   overlays: boolean;
   focusTrade: { trade: Trade; key: number } | null;
+  /** Draw the ERL-100 layer: holding-window stop/target, entry/exit markers, current stop. */
+  signal: boolean;
 }
 
 interface Readout {
@@ -89,10 +92,16 @@ export function Chart({
   trades,
   overlays,
   focusTrade,
+  signal,
 }: Props) {
   const sectionRef = useRef<HTMLElement>(null);
-  const overlayRef = useRef({ positions, trades, overlays, symbol, timeframe });
-  overlayRef.current = { positions, trades, overlays, symbol, timeframe };
+  const overlayRef = useRef({ positions, trades, overlays, symbol, timeframe, signal });
+  overlayRef.current = { positions, trades, overlays, symbol, timeframe, signal };
+  const erlLinesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const erlPriceLineRef = useRef<IPriceLine | null>(null);
+  const [erlNote, setErlNote] = useState("");
+  /** Market and timeframe of the bars in barsRef; the ERL layer never reads mismatched bars. */
+  const loadedKeyRef = useRef("");
   const [overlayCount, setOverlayCount] = useState({ visible: 0, total: 0 });
   const [focusMessage, setFocusMessage] = useState("");
   const hostRef = useRef<HTMLDivElement>(null);
@@ -166,6 +175,18 @@ export function Chart({
         crosshairMarkerVisible: false,
       }),
     );
+    erlLinesRef.current = [
+      { color: "#ff8c00", lineStyle: LineStyle.Dashed },
+      { color: "#c7bca6", lineStyle: LineStyle.Dotted },
+    ].map((o) =>
+      chart.addSeries(LineSeries, {
+        ...o,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      }),
+    );
     chartRef.current = chart;
     candleRef.current = candles;
     bandRefs.current = bands;
@@ -220,6 +241,8 @@ export function Chart({
       chartRef.current = null;
       candleRef.current = null;
       bandRefs.current = [];
+      erlLinesRef.current = [];
+      erlPriceLineRef.current = null;
       markersRef.current = null;
       priceLinesRef.current = [];
       anchorsRef.current = [];
@@ -287,15 +310,112 @@ export function Chart({
       o.timeframe,
     );
     setOverlayCount({ visible: account.visible, total: account.total });
-    const all = o.overlays ? [...markers, ...account.markers] : markers;
+    const erl =
+      loadedKeyRef.current === `${o.symbol}:${o.timeframe}`
+        ? erlLayer(bars, o.signal, o.symbol, o.timeframe)
+        : [];
+    const base = o.overlays ? [...markers, ...account.markers] : markers;
+    const all = [...base, ...erl];
     markersRef.current?.setMarkers(
       all.sort((a, b) => Number(a.time) - Number(b.time)),
     );
   };
 
+  /** ERL markers, holding-window lines and the current stop price line; [] when hidden. */
+  const erlLayer = (
+    bars: Candle[],
+    on: boolean,
+    sym: string,
+    tf: Timeframe,
+  ): SeriesMarker<Time>[] => {
+    const candles = candleRef.current;
+    const [stopSeries, targetSeries] = erlLinesRef.current;
+    if (erlPriceLineRef.current && candles) {
+      candles.removePriceLine(erlPriceLineRef.current);
+      erlPriceLineRef.current = null;
+    }
+    if (!on || (sym !== "BTC" && sym !== "ETH") || !bars.length) {
+      stopSeries?.setData([]);
+      targetSeries?.setData([]);
+      setErlNote(on ? "ERL-100 covers BTC and ETH only." : "");
+      return [];
+    }
+    const { erl, bt, state } = analyseErl(bars, sym, tf, Math.floor(Date.now() / 1000));
+    const out: SeriesMarker<Time>[] = [];
+    const stop: LineData<Time>[] = [],
+      target: LineData<Time>[] = [];
+    const windows = bt.trades.map((t) => ({
+      from: t.candidate.index,
+      to: t.exitIndex ?? erl.closedCount - 1,
+      stop: t.rawStop,
+      target: t.rawTarget,
+    }));
+    if (bt.pending)
+      windows.push({
+        from: bt.pending.index,
+        to: bt.pending.index,
+        stop: bt.pending.rawStop,
+        target: bt.pending.rawTarget,
+      });
+    bars.forEach((b, i) => {
+      const w = windows.find((x) => i >= x.from && i <= x.to);
+      stop.push(w ? { time: asTime(b.t), value: w.stop } : ({ time: asTime(b.t) } as LineData<Time>));
+      target.push(w ? { time: asTime(b.t), value: w.target } : ({ time: asTime(b.t) } as LineData<Time>));
+    });
+    stopSeries?.setData(stop);
+    targetSeries?.setData(target);
+    const entryAllowed = !erl.diagnostics.some((d) => d.code === "TF_ENTRY_DISABLED");
+    if (!entryAllowed) {
+      for (const c of erl.candidates)
+        out.push({
+          time: asTime(c.t),
+          position: c.side === 1 ? "belowBar" : "aboveBar",
+          shape: "circle",
+          color: "#8f8676",
+          size: 0.5,
+        });
+      setErlNote(`ERL-100 entries are 1m/5m only; ${tf} shows geometry only.`);
+      return out;
+    }
+    const entry = (i: number, side: 1 | -1) =>
+      out.push({
+        time: asTime(bars[i].t),
+        position: side === 1 ? "belowBar" : "aboveBar",
+        shape: side === 1 ? "arrowUp" : "arrowDown",
+        color: "#ff8c00",
+        size: 0.6,
+        text: "ERL",
+      });
+    for (const t of bt.trades) {
+      entry(t.candidate.index, t.side);
+      if (t.exitIndex !== null && t.status !== "OPEN")
+        out.push({
+          time: asTime(bars[t.exitIndex].t),
+          position: t.side === 1 ? "aboveBar" : "belowBar",
+          shape: "square",
+          color: t.pnl !== null && t.pnl > 0 ? "#22c55e" : "#c7bca6",
+          size: 0.5,
+        });
+    }
+    if (bt.pending) entry(bt.pending.index, bt.pending.side);
+    if (state.stop !== null && candles)
+      erlPriceLineRef.current = candles.createPriceLine({
+        price: state.stop,
+        color: "#ff8c00",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "ERL stop",
+      });
+    setErlNote(
+      `ERL-100 · ${bt.trades.length} signals in loaded ${tf} candles · current ${state.state}`,
+    );
+    return out;
+  };
+
   useEffect(() => {
     applyMarkers();
-  }, [trades, positions, overlays, version]);
+  }, [trades, positions, overlays, version, signal]);
 
   useEffect(() => {
     if (
@@ -364,6 +484,7 @@ export function Chart({
       .then((rows) => {
         if (ctrl.signal.aborted || !chartRef.current) return;
         barsRef.current = rows;
+        loadedKeyRef.current = `${symbol}:${timeframe}`;
         applyAll();
         const range = initialRange(rows.length, 160);
         chartRef.current.timeScale().setVisibleLogicalRange(range);
@@ -615,6 +736,15 @@ export function Chart({
         <span className="lg lg-bust">Bust within 35%</span>
         <span className="ro-k">Times in UTC</span>
       </p>
+      {signal && (
+        <p className="overlay-legend erl-legend">
+          <span className="erl-key">▲▼ ERL entry</span>
+          <span>■ ERL exit</span>
+          <span className="lg lg-erl">Stop</span>
+          <span className="lg lg-erl-t">Target</span>
+          <span className="hint">{erlNote}</span>
+        </p>
+      )}
       <p className="overlay-legend">
         <span className="profit">▲ Long entry</span>
         <span className="loss">▼ Short entry</span>

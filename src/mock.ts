@@ -2,10 +2,12 @@ import type {
   Backend,
   Candle,
   Cashflow,
+  LiquidationMap,
   Market,
   Page,
   PortfolioPoint,
   Position,
+  ProtocolSummary,
   Summary,
   Timeframe,
   Trade,
@@ -230,8 +232,76 @@ export function createMockBackend(): Backend {
       nextCursor: start + limit < items.length ? String(start + limit) : null,
     };
   };
+  // Synthetic resting liquidation levels: seeded clusters around the mark, re-seeded each
+  // 30 s so the snapshot drifts. Never presented as observed Papertrade liquidity.
+  const liquidationMap = (
+    symbol: "BTC" | "ETH",
+    rangePct: 1 | 2 | 5 | 10 | 25,
+  ): LiquidationMap => {
+    const center = mark(symbol);
+    const from = center * (1 - rangePct / 100),
+      to = center * (1 + rangePct / 100);
+    const width = (to - from) / 150;
+    const r = random(hash(`${symbol}:${Math.floor(Date.now() / 30_000)}`));
+    const clusters = Array.from({ length: 10 }, (_, i) => ({
+      long: i < 5,
+      at: center * (1 + (i < 5 ? -1 : 1) * (0.0008 + r() * 0.0085)),
+      usd: 40_000 + r() * 260_000,
+    }));
+    const buckets = Array.from({ length: 150 }, (_, i) => {
+      const lo = from + i * width,
+        hi = i === 149 ? to : from + (i + 1) * width;
+      const mid = (lo + hi) / 2;
+      let longUsd = 0,
+        shortUsd = 0;
+      for (const c of clusters) {
+        const d = Math.abs(mid - c.at) / center;
+        const share = Math.exp(-((d / 0.0006) ** 2));
+        if (share < 0.01) continue;
+        if (c.long && mid < center) longUsd += c.usd * share;
+        if (!c.long && mid > center) shortUsd += c.usd * share;
+      }
+      // Background of small positions on both sides of price.
+      if (mid < center) longUsd += 500 + r() * 2500;
+      else shortUsd += 500 + r() * 2500;
+      return {
+        lo,
+        hi,
+        longUsd: round(longUsd),
+        shortUsd: round(shortUsd),
+        longCount: Math.round(longUsd / 4000),
+        shortCount: Math.round(shortUsd / 4000),
+      };
+    });
+    return {
+      symbol,
+      rangePct,
+      from,
+      to,
+      asOf: Date.now(),
+      buckets,
+      below: { longUsd: round(900_000 + r() * 4e5), shortUsd: 0, longCount: 210, shortCount: 0 },
+      above: { longUsd: 0, shortUsd: round(700_000 + r() * 4e5), longCount: 0, shortCount: 180 },
+    };
+  };
   return {
     mock: true,
+    async liquidationMap(symbol, range, signal) {
+      await delay(signal);
+      return liquidationMap(symbol, range);
+    },
+    async protocolSummary(signal): Promise<ProtocolSummary> {
+      await delay(signal);
+      return {
+        asOf: Date.now(),
+        tvlUsd: 4_812_350.12,
+        marginUsd: 1_240_880.5,
+        lpUsd: 3_571_469.62,
+        queueUsd: 0,
+        openPositions: 312,
+        lifetimeVolumeUsd: 1_284_550_210,
+      };
+    },
     async markets(signal) {
       await delay(signal);
       return ["BTC", "ETH"].map((symbol, instrumentId): Market => ({

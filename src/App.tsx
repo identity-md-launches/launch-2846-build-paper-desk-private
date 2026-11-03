@@ -28,6 +28,8 @@ import {
 import { Header } from "./components/Header";
 import { Chart } from "./components/Chart";
 import { Analysis } from "./components/Analysis";
+import { SignalPanel } from "./components/SignalPanel";
+import { useErl } from "./useErl";
 import {
   CashflowsTable,
   pnlClass,
@@ -63,6 +65,18 @@ export function App() {
       key: number;
     } | null>(null);
   const [quoteRetry, setQuoteRetry] = useState(0);
+  const [signalLayer, setSignalLayer] = useState(true),
+    [signalTf, setSignalTf] = useState<Timeframe>("1m");
+  // The signal panel lives on the account F1 view; nothing polls before an address loads.
+  const erl = useErl(address ? backend : null, signalTf);
+  const signalPanel = (
+    <SignalPanel
+      markets={erl.markets}
+      tf={signalTf}
+      onTf={setSignalTf}
+      asOfSec={erl.markets.find((m) => m.map)?.map?.asOfSec ?? null}
+    />
+  );
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const account = useAccount(backend, address);
   const stats = useMemo(
@@ -283,7 +297,7 @@ export function App() {
                 <div>
                   <span className="section-code">01</span>
                   <h3>Account</h3>
-                  <p>Positions and trade entries on the price chart.</p>
+                  <p>Positions, entries and the ERL-100 signal on the chart.</p>
                 </div>
                 <div>
                   <span className="section-code">02</span>
@@ -293,7 +307,7 @@ export function App() {
                 <div>
                   <span className="section-code">03</span>
                   <h3>Analysis</h3>
-                  <p>Equity, trade statistics and entry sigma buckets.</p>
+                  <p>Equity, statistics and a 100× ERL-100 backtest.</p>
                 </div>
               </div>
               <p className="empty-mode">
@@ -368,6 +382,7 @@ export function App() {
                       trade history.
                     </p>
                   </div>
+                  {signalPanel}
                   <div className="market-toolbar">
                     <div className="seg" role="group" aria-label="Market">
                       {["BTC", "ETH"].map((s) => (
@@ -405,6 +420,14 @@ export function App() {
                       />
                       Account overlays
                     </label>
+                    <label className="overlay-toggle">
+                      <input
+                        type="checkbox"
+                        checked={signalLayer}
+                        onChange={(e) => setSignalLayer(e.target.checked)}
+                      />
+                      Signal
+                    </label>
                   </div>
                   {marketError && (
                     <p className="local-error">
@@ -428,6 +451,7 @@ export function App() {
                       trades={account.trades ?? []}
                       overlays={overlays}
                       focusTrade={focusTrade}
+                      signal={signalLayer}
                     />
                   )}
                   <PositionsTable positions={account.positions} />

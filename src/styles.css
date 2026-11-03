@@ -1225,3 +1225,137 @@ button:not(:disabled):active {
     font-size: var(--fs-lg);
   }
 }
+/* ERL-100 signal panel (F1), chart layer legend, backtest and explainer. */
+.signal-panel {
+  min-width: 0;
+  border-bottom: 1px solid var(--color-line);
+}
+.empty-workspace .signal-panel {
+  margin-block-start: 32px;
+  border: 1px solid var(--color-line);
+}
+.sig-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--color-line);
+  border-block-start: 1px solid var(--color-line);
+}
+.sig-card {
+  min-width: 0;
+  background: var(--color-bg);
+  padding: 8px 16px 10px;
+}
+.sig-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-block-end: 6px;
+}
+.sig-head h3 {
+  font-size: var(--fs-md);
+}
+.sig-head .hint {
+  font-size: var(--fs-xs);
+  flex-basis: 100%;
+}
+.sig-state {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+}
+.sig-long {
+  color: var(--color-profit);
+}
+.sig-short {
+  color: var(--color-loss);
+}
+.sig-flat {
+  color: var(--color-text-dim);
+}
+.sig-exit {
+  color: var(--color-accent);
+}
+.sig-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 16px;
+  font-size: var(--fs-xs);
+}
+.sig-rows > div {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.sig-rows dt {
+  color: var(--color-text-dim);
+  flex: none;
+  min-width: 9ch;
+}
+.sig-rows dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sig-rows .sig-live {
+  grid-column: 1 / -1;
+}
+.sig-foot {
+  font-size: var(--fs-xs);
+  border-block-start: 1px solid var(--color-line);
+  padding-block: 6px;
+}
+.explainer {
+  border-block-start: 1px solid var(--color-line);
+  font-size: var(--fs-xs);
+}
+.explainer summary {
+  min-height: 34px;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--color-accent);
+}
+.explainer-body {
+  padding: 0 16px 12px;
+  display: grid;
+  gap: 8px;
+  max-width: 90ch;
+}
+.lg-erl {
+  color: var(--color-accent);
+}
+.lg-erl::before {
+  background: transparent;
+  border-top: 1px dashed var(--color-accent);
+}
+.lg-erl-t {
+  color: var(--color-text);
+}
+.lg-erl-t::before {
+  background: transparent;
+  border-top: 1px dotted var(--color-text);
+}
+.erl-key {
+  color: var(--color-accent);
+}
+.table-caption {
+  text-align: start;
+  padding: 8px 16px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  caption-side: top;
+}
+.bt-host {
+  height: 220px;
+}
+@media (max-width: 760px) {
+  .sig-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 380px) {
+  .sig-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -18,6 +18,7 @@ import {
 import { computeStats, entrySigmaStats, type GroupStats } from "../stats";
 import { formatDateTime, formatLeverage, formatUsd, toMs } from "../format";
 import { pnlClass } from "./Tables";
+import { Backtest } from "./Backtest";
 const pct = (n: number | null) => (n === null ? "--" : `${n.toFixed(1)}%`);
 const hold = (n: number | null) =>
   n === null
@@ -210,6 +211,7 @@ export function Analysis({
           denominator.
         </p>
       </section>
+      <Backtest backend={backend} trades={trades} />
       <div className="analysis-groups">
         <GroupTable title="PnL by market" groups={stats.byMarket} />
         <GroupTable title="PnL by side" groups={stats.bySide} />
